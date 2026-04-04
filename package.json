@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "backfill:multiagency:dry": "node backfill_multiagency_data.cjs",
+    "backfill:multiagency:apply": "node backfill_multiagency_data.cjs --apply"
   },
   "dependencies": {
     "firebase": "^12.7.0",

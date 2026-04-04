@@ -1,7 +1,8 @@
 import React from "react";
+import { isUserAdmin } from "./userProfile";
 
 export default function Navbar({ onLogout, user, onSelect }) {
-  const isAdmin = user?.admin || user?.email === "rmadrigalj@ice.go.cr";
+  const isAdmin = isUserAdmin(user);
 
   const menuItems = [
     "Solicitar eSIM",
@@ -41,6 +42,7 @@ export default function Navbar({ onLogout, user, onSelect }) {
           <div style={styles.appName}>EsynSadeCloud</div>
           <div style={styles.userName}>{user?.name || "Usuario"}</div>
           <div style={styles.userEmail}>{user?.email || ""}</div>
+          {user?.agencia && <div style={styles.userAgency}>Agencia: {user.agencia}</div>}
         </div>
       </div>
 
@@ -105,6 +107,13 @@ const styles = {
     fontSize: 12,
     color: "#fff",
     opacity: 0.7,
+  },
+  userAgency: {
+    fontSize: 12,
+    color: "#9ef6ea",
+    opacity: 0.9,
+    marginTop: 2,
+    letterSpacing: 0.2,
   },
   menu: {
     display: "flex",

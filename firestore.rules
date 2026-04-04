@@ -1,9 +1,163 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Regla general: solo usuarios autenticados pueden leer y escribir
-    match /{collection}/{document=**} {
-      allow read, write: if request.auth != null;
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userProfilePath() {
+      return /databases/$(database)/documents/usuarios/$(request.auth.uid);
+    }
+
+    function hasProfile() {
+      return signedIn() && exists(userProfilePath());
+    }
+
+    function profile() {
+      return get(userProfilePath()).data;
+    }
+
+    function myAgency() {
+      return profile().agencia;
+    }
+
+    function isGeneralAdmin() {
+      return hasProfile() && (
+        profile().adminGeneral == true ||
+        profile().rol == "admin_general" ||
+        profile().rol == "super_admin" ||
+        profile().rol == "administrador_general" ||
+        request.auth.token.email == "rmadrigalj@ice.go.cr"
+      );
+    }
+
+    function isAgencyAdmin() {
+      return hasProfile() && (
+        profile().adminAgencia == true ||
+        profile().rol == "admin_agencia" ||
+        profile().rol == "administrador_agencia"
+      );
+    }
+
+    function isAgencyAdminOf(agency) {
+      return isAgencyAdmin() && myAgency() == agency;
+    }
+
+    function isAgencyMember(agency) {
+      return hasProfile() && (
+        isGeneralAdmin() ||
+        myAgency() == agency
+      );
+    }
+
+    function isOwnerEmail(email) {
+      return signedIn() && request.auth.token.email == email;
+    }
+
+    function isAllowedRole(role) {
+      return role in ["agente", "admin_agencia", "admin_general"];
+    }
+
+    match /usuarios/{userId} {
+      allow read: if isGeneralAdmin() ||
+        (resource.data.agencia is string && isAgencyAdminOf(resource.data.agencia)) ||
+        (signedIn() && userId == request.auth.uid) ||
+        isOwnerEmail(resource.data.email);
+
+      allow create: if request.resource.data.email is string &&
+        request.resource.data.rol is string &&
+        isAllowedRole(request.resource.data.rol) && (
+          isGeneralAdmin() ||
+          (
+            isAgencyAdmin() &&
+            request.resource.data.rol == "agente" &&
+            request.resource.data.agencia == myAgency() &&
+            request.resource.data.adminGeneral != true &&
+            request.resource.data.adminAgencia != true
+          )
+        );
+
+      allow update: if isGeneralAdmin() ||
+        (
+          isAgencyAdmin() &&
+          resource.data.agencia == myAgency() &&
+          request.resource.data.agencia == myAgency() &&
+          request.resource.data.adminGeneral != true &&
+          request.resource.data.rol != "admin_general"
+        ) ||
+        (
+          signedIn() && userId == request.auth.uid &&
+          request.resource.data.email == resource.data.email &&
+          request.resource.data.rol == resource.data.rol &&
+          request.resource.data.agencia == resource.data.agencia
+        );
+
+      allow delete: if isGeneralAdmin();
+    }
+
+    match /esims/{esimId} {
+      allow read: if resource.data.agencia is string && isAgencyMember(resource.data.agencia);
+
+      allow create: if request.resource.data.agencia is string && (
+        isGeneralAdmin() || isAgencyAdminOf(request.resource.data.agencia)
+      );
+
+      allow update: if resource.data.agencia is string &&
+        isAgencyMember(resource.data.agencia) &&
+        request.resource.data.agencia == resource.data.agencia;
+
+      allow delete: if resource.data.agencia is string && (
+        isGeneralAdmin() || isAgencyAdminOf(resource.data.agencia)
+      );
+    }
+
+    match /lotes/{loteId} {
+      allow read: if resource.data.agencia is string && (
+        isGeneralAdmin() || isAgencyAdminOf(resource.data.agencia)
+      );
+
+      allow create: if request.resource.data.agencia is string && (
+        isGeneralAdmin() || isAgencyAdminOf(request.resource.data.agencia)
+      );
+
+      allow update, delete: if resource.data.agencia is string && (
+        isGeneralAdmin() || isAgencyAdminOf(resource.data.agencia)
+      );
+    }
+
+    match /solicitudes/{solicitudId} {
+      allow read: if isGeneralAdmin() ||
+        isOwnerEmail(resource.data.usuario) ||
+        (resource.data.agencia is string && isAgencyAdminOf(resource.data.agencia));
+
+      allow create: if hasProfile() &&
+        request.resource.data.usuario == request.auth.token.email &&
+        request.resource.data.agencia == myAgency();
+
+      allow update, delete: if isGeneralAdmin() ||
+        (resource.data.agencia is string && isAgencyAdminOf(resource.data.agencia));
+    }
+
+    match /devoluciones/{devolucionId} {
+      allow read: if isGeneralAdmin() ||
+        isOwnerEmail(resource.data.usuario) ||
+        (resource.data.agencia is string && isAgencyAdminOf(resource.data.agencia));
+
+      allow create: if hasProfile() &&
+        request.resource.data.usuario == request.auth.token.email &&
+        request.resource.data.agencia == myAgency();
+
+      allow update, delete: if isGeneralAdmin() ||
+        (resource.data.agencia is string && isAgencyAdminOf(resource.data.agencia));
+    }
+
+    match /agencias/{agenciaId} {
+      allow read: if hasProfile();
+      allow create, update, delete: if isGeneralAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

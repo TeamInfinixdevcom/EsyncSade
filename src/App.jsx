@@ -4,17 +4,19 @@ import React, { useState, useEffect } from "react";
 import SplashScreen from "./SplashScreen";
 import Login from "./Login";
 import Navbar from "./Navbar";
+import LoadingScreen from "./LoadingScreen";
 
 import EsimRequestForm from "./EsimRequestForm";
 import DevolucionEsims from "./DevolucionEsims";
 import UserReport from "./UserReport";
 import AdminPanel from "./AdminPanel";
 import TeamRequestsTable from "./TeamRequestsTable";
+import TeamReturnsTable from "./TeamReturnsTable";
 
 /* ========= FIREBASE ========= */
 import { auth } from "./firebase";
 import { onAuthStateChanged } from "firebase/auth";
-import { getUserProfile } from "./userProfile";
+import { getUserProfile, isUserAdmin } from "./userProfile";
 
 function App() {
   const [user, setUser] = useState(null);
@@ -22,7 +24,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [showSplash, setShowSplash] = useState(true);
 
-  const isAdmin = user?.admin || user?.email === "rmadrigalj@ice.go.cr";
+  const isAdmin = isUserAdmin(user);
 
   /* ========= AUTH ========= */
   useEffect(() => {
@@ -44,6 +46,12 @@ function App() {
     return () => unsubscribe();
   }, [showSplash]);
 
+  useEffect(() => {
+    if (!isAdmin && section === "Panel Admin") {
+      setSection("Solicitar eSIM");
+    }
+  }, [isAdmin, section]);
+
   const handleLogout = async () => {
     await auth.signOut();
     setUser(null);
@@ -56,11 +64,7 @@ function App() {
 
   /* ========= LOADING ========= */
   if (loading) {
-    return (
-      <div style={styles.loading}>
-        Cargando...
-      </div>
-    );
+    return <LoadingScreen />;
   }
 
   /* ========= LOGIN ========= */
@@ -74,18 +78,24 @@ function App() {
 
   /* ========= SECCIONES ========= */
   const sections = {
-    "Solicitar eSIM": <EsimRequestForm />,
-    "Devolución eSIMs": <DevolucionEsims />,
-    "Mis Solicitudes": <UserReport />,
-    "Panel Admin": isAdmin && (
+    "Solicitar eSIM": <EsimRequestForm user={user} />,
+    "Devolución eSIMs": <DevolucionEsims user={user} />,
+    "Mis Solicitudes": <UserReport user={user} />,
+  };
+
+  if (isAdmin) {
+    sections["Panel Admin"] = (
       <>
-        <AdminPanel />
+        <AdminPanel user={user} />
         <div style={{ marginTop: 32 }}>
-          <TeamRequestsTable />
+          <TeamRequestsTable user={user} />
+        </div>
+        <div style={{ marginTop: 24 }}>
+          <TeamReturnsTable user={user} />
         </div>
       </>
-    ),
-  };
+    );
+  }
 
   return (
     <div style={styles.app}>
@@ -112,16 +122,11 @@ const styles = {
     minWidth: "100vw",
     background:
       "radial-gradient(ellipse at 40% 40%, #181818 60%, #0ff 100%, #23243e 120%)",
-    overflow: "hidden",
+    overflowX: "hidden",
+    overflowY: "auto",
   },
   main: {
     padding: "2rem 0",
-  },
-  loading: {
-    color: "#00fff7",
-    textAlign: "center",
-    marginTop: 80,
-    fontSize: 24,
   },
   loginWrapper: {
     width: "100vw",
