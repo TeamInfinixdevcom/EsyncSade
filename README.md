@@ -1,17 +1,142 @@
-# React + Vite
+# EsyncSade — eSIM Management App
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Aplicación web para la gestión de eSIMs, solicitudes y usuarios, construida con **React + Vite** y **Firebase** (Hosting, Firestore y Cloud Functions).
 
-Currently, two official plugins are available:
+---
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Requisitos previos
 
-## React Compiler
+> **Sin Chocolatey** — todo se instala con los instaladores oficiales o con `npm`.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### 1. Node.js (v18 o superior)
 
-## Expanding the ESLint configuration
+Descarga el instalador oficial desde <https://nodejs.org/en/download> (elige "LTS – Windows Installer (.msi)") e instálalo normalmente.  
+Verifica la instalación:
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```bash
+node -v
+npm -v
+```
+
+### 2. Firebase CLI
+
+Una vez que Node.js está instalado, instala Firebase CLI **sin Chocolatey** usando `npm`:
+
+```bash
+npm install -g firebase-tools
+```
+
+Verifica:
+
+```bash
+firebase --version
+```
+
+---
+
+## Configuración del proyecto
+
+### Clonar el repositorio
+
+```bash
+git clone <URL-del-repositorio>
+cd EsyncSade
+```
+
+### Instalar dependencias (app + functions de una sola vez)
+
+```bash
+npm run install:all
+```
+
+O por separado:
+
+```bash
+# Dependencias de la app React
+npm install
+
+# Dependencias de las Cloud Functions
+npm run install:functions
+```
+
+### Iniciar sesión en Firebase
+
+```bash
+firebase login
+```
+
+---
+
+## Desarrollo local
+
+Inicia el servidor de desarrollo de Vite:
+
+```bash
+npm run dev
+```
+
+---
+
+## Despliegue (Deploy)
+
+### Desplegar todo (Hosting + Functions)
+
+```bash
+npm run deploy
+```
+
+### Solo Hosting (app React)
+
+```bash
+npm run deploy:hosting
+```
+
+### Solo Cloud Functions
+
+```bash
+npm run deploy:functions
+```
+
+---
+
+## Scripts disponibles
+
+| Comando | Descripción |
+|---|---|
+| `npm run dev` | Inicia servidor de desarrollo |
+| `npm run build` | Genera build de producción en `dist/` |
+| `npm run preview` | Previsualiza el build de producción localmente |
+| `npm run lint` | Ejecuta ESLint |
+| `npm run install:all` | Instala dependencias de la app y de functions |
+| `npm run install:functions` | Instala dependencias solo de `functions/` |
+| `npm run deploy` | Build + deploy completo (Hosting + Functions) |
+| `npm run deploy:hosting` | Build + deploy solo Hosting |
+| `npm run deploy:functions` | Deploy solo Cloud Functions |
+
+---
+
+## Estructura del proyecto
+
+```
+EsyncSade/
+├── src/                  # Código fuente React
+├── functions/            # Cloud Functions de Firebase
+│   ├── index.js          # Funciones: listUsers, deleteUser, createUser
+│   └── package.json
+├── public/               # Archivos estáticos
+├── firebase.json         # Configuración Firebase
+├── firestore.rules       # Reglas de seguridad Firestore
+├── vite.config.js        # Configuración Vite
+└── package.json
+```
+
+---
+
+## Tecnologías
+
+- **Frontend**: React 19, Vite 7, Recharts
+- **Backend**: Firebase Cloud Functions (Node.js 22)
+- **Base de datos**: Firestore
+- **Autenticación**: Firebase Auth
+- **Hosting**: Firebase Hosting
 
