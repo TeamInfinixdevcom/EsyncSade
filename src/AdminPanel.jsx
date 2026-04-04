@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from "react";
-import { getFirestore, collection, addDoc, onSnapshot, doc, deleteDoc, writeBatch } from "firebase/firestore";
-import { auth } from "./firebase";
+import { getFirestore, collection, addDoc, onSnapshot, doc, writeBatch, query, where, getDocs } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
+import { auth, functions } from "./firebase";
 import Dashboard from "./Dashboard";
 
 function extractSeries(text) {
   const matches = text.match(/\b\d{20}\b/g);
-  return matches ? matches.sort() : [];
+  if (!matches) return [];
+  const unique = Array.from(new Set(matches));
+  return unique.sort();
 }
 
 export default function AdminPanel() {
@@ -17,10 +20,82 @@ export default function AdminPanel() {
   const [mensaje, setMensaje] = useState("");
   const [historial, setHistorial] = useState([]);
   const [page, setPage] = useState(1);
+  const [nuevoNombre, setNuevoNombre] = useState("");
+  const [nuevoEmail, setNuevoEmail] = useState("");
+  const [nuevoPassword, setNuevoPassword] = useState("");
+  const [nuevoRol, setNuevoRol] = useState("ejecutivo");
+  const [nuevoActivo, setNuevoActivo] = useState(true);
+  const [mensajeUsuario, setMensajeUsuario] = useState("");
+  const [creandoUsuario, setCreandoUsuario] = useState(false);
+  const [usuarios, setUsuarios] = useState([]);
+  const [cargandoUsuarios, setCargandoUsuarios] = useState(false);
+  const [mensajeUsuarios, setMensajeUsuarios] = useState("");
+
+  const fetchUsuarios = async () => {
+    setCargandoUsuarios(true);
+    setMensajeUsuarios("");
+    try {
+      const listUsers = httpsCallable(functions, "listUsers");
+      const res = await listUsers();
+      setUsuarios(res.data.usuarios || []);
+    } catch (err) {
+      setMensajeUsuarios(err.message || "Error al obtener usuarios.");
+    }
+    setCargandoUsuarios(false);
+  };
+
+  const handleBorrarUsuario = async (uid, email) => {
+    if (!window.confirm(`¿Seguro que deseas borrar el usuario ${email}?`)) return;
+    setMensajeUsuarios("");
+    try {
+      const deleteUser = httpsCallable(functions, "deleteUser");
+      await deleteUser({ uid });
+      setMensajeUsuarios("Usuario eliminado correctamente.");
+      fetchUsuarios();
+    } catch (err) {
+      setMensajeUsuarios(err.message || "Error al borrar usuario.");
+    }
+  };
+
+  useEffect(() => {
+    if (view === "usuarios") {
+      fetchUsuarios();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
 
   const handleExtract = () => {
     const result = extractSeries(input);
     setSeries(result);
+  };
+
+  const handleCrearUsuario = async (e) => {
+    e.preventDefault();
+    setMensajeUsuario("");
+    if (!nuevoNombre || !nuevoEmail || !nuevoPassword) {
+      setMensajeUsuario("Completa nombre, email y contrasena.");
+      return;
+    }
+    setCreandoUsuario(true);
+    try {
+      const crearUsuario = httpsCallable(functions, "createUser");
+      const result = await crearUsuario({
+        nombre: nuevoNombre,
+        email: nuevoEmail,
+        password: nuevoPassword,
+        rol: nuevoRol,
+        activo: nuevoActivo
+      });
+      setMensajeUsuario(result.data?.message || "Usuario creado correctamente.");
+      setNuevoNombre("");
+      setNuevoEmail("");
+      setNuevoPassword("");
+      setNuevoRol("ejecutivo");
+      setNuevoActivo(true);
+    } catch (err) {
+      setMensajeUsuario(err.message || "Error al crear usuario.");
+    }
+    setCreandoUsuario(false);
   };
 
   // Subir series como lote a Firestore
@@ -33,6 +108,22 @@ export default function AdminPanel() {
     setMensaje("");
     try {
       const db = getFirestore();
+      // Verificar si alguna serie ya existe en esims
+      const existQuery = query(collection(db, "esims"), where("serie", "in", series.slice(0, 10)));
+      // Firestore limita a 10 elementos por 'in', así que hacemos chunks
+      let existentes = [];
+      const CHUNK_SIZE = 10;
+      for (let i = 0; i < series.length; i += CHUNK_SIZE) {
+        const chunk = series.slice(i, i + CHUNK_SIZE);
+        const q = query(collection(db, "esims"), where("serie", "in", chunk));
+        const snap = await getDocs(q);
+        snap.forEach(docu => existentes.push(docu.id));
+      }
+      if (existentes.length > 0) {
+        setMensaje(`❌ Las siguientes series ya existen y no se subieron: \n${existentes.join(", ")}`);
+        setSubiendo(false);
+        return;
+      }
       // Crear lote
       const loteRef = await addDoc(collection(db, "lotes"), {
         fecha: new Date().toISOString(),
@@ -40,20 +131,31 @@ export default function AdminPanel() {
         usuario: auth.currentUser?.email || "Desconocido",
         series
       });
-      // Subir cada serie como documento en la colección 'esims', guardando el id del lote
-      for (const serie of series) {
-        await addDoc(collection(db, "esims"), {
-          serie,
-          estado: "disponible",
-          fechaCarga: new Date().toISOString(),
-          loteId: loteRef.id
+      // Subir series en batch, usando la serie como id para evitar duplicados locales
+      const batch = writeBatch(db);
+      const now = new Date().toISOString();
+      const chunks = [];
+      const CHUNK_SIZE_BATCH = 450;
+      for (let i = 0; i < series.length; i += CHUNK_SIZE_BATCH) {
+        chunks.push(series.slice(i, i + CHUNK_SIZE_BATCH));
+      }
+      for (const chunk of chunks) {
+        chunk.forEach((serie) => {
+          const ref = doc(db, "esims", serie);
+          batch.set(ref, {
+            serie,
+            estado: "disponible",
+            fechaCarga: now,
+            loteId: loteRef.id
+          });
         });
+        await batch.commit();
       }
       setMensaje(`Se subieron ${series.length} eSIMs a la nube.`);
       setSeries([]);
       setInput("");
     } catch (err) {
-      setMensaje("Error al subir las series. Intenta de nuevo.");
+      setMensaje("Error al subir las series. Intenta de nuevo. " + (err.message || ""));
     }
     setSubiendo(false);
   };
@@ -73,20 +175,26 @@ export default function AdminPanel() {
   // Borrar lote y sus series
   const handleBorrarLote = async (loteId) => {
     if (!window.confirm("¿Seguro que deseas borrar este lote y todas sus series?")) return;
-    const db = getFirestore();
-    // Borrar series asociadas
-    const batch = writeBatch(db);
-    const esimsSnap = await collection(db, "esims");
-    const esimsQuery = await onSnapshot(collection(db, "esims"), (snap) => {
-      snap.forEach(docu => {
-        if (docu.data().loteId === loteId) {
-          batch.delete(doc(db, "esims", docu.id));
-        }
+    try {
+      const db = getFirestore();
+      const batch = writeBatch(db);
+      
+      // Buscar y borrar todas las eSIMs del lote
+      const esimsQuery = query(collection(db, "esims"), where("loteId", "==", loteId));
+      const esimsSnap = await getDocs(esimsQuery);
+      
+      esimsSnap.forEach((docu) => {
+        batch.delete(doc(db, "esims", docu.id));
       });
-    });
-    batch.delete(doc(db, "lotes", loteId));
-    await batch.commit();
-    setMensaje("Lote borrado correctamente.");
+      
+      // Borrar el lote
+      batch.delete(doc(db, "lotes", loteId));
+      
+      await batch.commit();
+      setMensaje("✅ Lote borrado correctamente.");
+    } catch (err) {
+      setMensaje("Error al borrar el lote: " + err.message);
+    }
   };
 
   return (
@@ -100,6 +208,10 @@ export default function AdminPanel() {
           onClick={() => setView("series")}
           style={{ background: view === "series" ? "#bd34fe" : "#232323", color: view === "series" ? "#fff" : "#bd34fe", border: 'none', borderRadius: 12, padding: '0.7rem 2rem', fontWeight: 900, fontSize: 18, boxShadow: view === "series" ? '0 2px 16px #bd34fecc' : 'none', cursor: 'pointer', letterSpacing: 1, textShadow: view === "series" ? '0 1px 8px #fff' : '0 1px 8px #bd34fecc' }}
         >Carga de Series</button>
+        <button
+          onClick={() => setView("usuarios")}
+          style={{ background: view === "usuarios" ? "#ff34fc" : "#232323", color: view === "usuarios" ? "#fff" : "#ff34fc", border: 'none', borderRadius: 12, padding: '0.7rem 2rem', fontWeight: 900, fontSize: 18, boxShadow: view === "usuarios" ? '0 2px 16px #ff34fccc' : 'none', cursor: 'pointer', letterSpacing: 1, textShadow: view === "usuarios" ? '0 1px 8px #fff' : '0 1px 8px #ff34fccc' }}
+        >Usuarios</button>
       </div>
       {view === "dashboard" && (
         <Dashboard />
@@ -174,6 +286,63 @@ export default function AdminPanel() {
               )}
             </div>
           </div>
+        </div>
+      )}
+      {view === "usuarios" && (
+        <div style={{ width: '100%', maxWidth: 900, margin: "0 auto", background: "#181818", borderRadius: 20, boxShadow: "0 0 32px 4px #ff34fccc", padding: "2.5vw 2vw", color: "#fff", boxSizing: 'border-box' }}>
+          <h2 style={{ color: "#ff34fc", textShadow: '0 2px 12px #ff34fccc, 0 0 2px #fff', fontWeight: 900, letterSpacing: 2 }}>Usuarios del sistema</h2>
+          <div style={{ marginBottom: 32 }}>
+            <form onSubmit={handleCrearUsuario} style={{ display: 'flex', flexDirection: 'row', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+              <input type="text" placeholder="Nombre" value={nuevoNombre} onChange={e => setNuevoNombre(e.target.value)} style={{ flex: 2, minWidth: 120, padding: 10, borderRadius: 8, border: '1.5px solid #ff34fc', fontSize: 15, background: '#232323', color: '#fff', boxShadow: '0 2px 8px #ff34fc33', outline: 'none' }} />
+              <input type="email" placeholder="Email" value={nuevoEmail} onChange={e => setNuevoEmail(e.target.value)} style={{ flex: 2, minWidth: 120, padding: 10, borderRadius: 8, border: '1.5px solid #ff34fc', fontSize: 15, background: '#232323', color: '#fff', boxShadow: '0 2px 8px #ff34fc33', outline: 'none' }} />
+              <input type="password" placeholder="Contrasena" value={nuevoPassword} onChange={e => setNuevoPassword(e.target.value)} style={{ flex: 2, minWidth: 120, padding: 10, borderRadius: 8, border: '1.5px solid #ff34fc', fontSize: 15, background: '#232323', color: '#fff', boxShadow: '0 2px 8px #ff34fc33', outline: 'none' }} />
+              <select value={nuevoRol} onChange={e => setNuevoRol(e.target.value)} style={{ flex: 1, minWidth: 100, padding: 10, borderRadius: 8, border: '1.5px solid #ff34fc', fontSize: 15, background: '#232323', color: '#fff', boxShadow: '0 2px 8px #ff34fc33', outline: 'none' }}>
+                <option value="ejecutivo">Ejecutivo</option>
+                <option value="admin">Admin</option>
+              </select>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#fff', minWidth: 80 }}>
+                <input type="checkbox" checked={nuevoActivo} onChange={e => setNuevoActivo(e.target.checked)} /> Activo
+              </label>
+              <button type="submit" disabled={creandoUsuario} style={{ background: 'linear-gradient(90deg, #ff34fc 0%, #00fff7 100%)', color: '#181818', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 900, fontSize: 16, boxShadow: '0 2px 16px #ff34fccc', cursor: creandoUsuario ? 'not-allowed' : 'pointer', opacity: creandoUsuario ? 0.6 : 1, transition: 'background 0.2s', letterSpacing: 1, textShadow: '0 1px 8px #fff' }}>{creandoUsuario ? 'Creando...' : 'Crear Usuario'}</button>
+            </form>
+            {mensajeUsuario && <div style={{ color: '#00fff7', marginTop: 12, fontWeight: 700 }}>{mensajeUsuario}</div>}
+          </div>
+          <h3 style={{ color: '#ff34fc', marginBottom: 12 }}>Lista de usuarios</h3>
+          {mensajeUsuarios && <div style={{ color: '#00fff7', marginBottom: 12, fontWeight: 700 }}>{mensajeUsuarios}</div>}
+          {cargandoUsuarios ? (
+            <div style={{ color: '#fff', opacity: 0.7 }}>Cargando usuarios...</div>
+          ) : (
+            <div style={{ maxHeight: '40vh', overflow: 'auto', background: '#232323', borderRadius: 12, padding: '1vw', border: '1.5px solid #ff34fc' }}>
+              {usuarios.length === 0 ? (
+                <div style={{ color: '#fff', opacity: 0.7 }}>No hay usuarios registrados.</div>
+              ) : (
+                <table style={{ width: '100%', color: '#fff', fontSize: 15, borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ color: '#ff34fc', fontWeight: 700 }}>
+                      <th style={{ padding: '6px 8px', textAlign: 'left' }}>Nombre</th>
+                      <th style={{ padding: '6px 8px', textAlign: 'left' }}>Email</th>
+                      <th style={{ padding: '6px 8px', textAlign: 'left' }}>Rol</th>
+                      <th style={{ padding: '6px 8px', textAlign: 'left' }}>Activo</th>
+                      <th style={{ padding: '6px 8px', textAlign: 'left' }}>Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {usuarios.map(u => (
+                      <tr key={u.uid} style={{ borderBottom: '1px solid #444' }}>
+                        <td style={{ padding: '6px 8px' }}>{u.nombre}</td>
+                        <td style={{ padding: '6px 8px' }}>{u.email}</td>
+                        <td style={{ padding: '6px 8px' }}>{u.rol}</td>
+                        <td style={{ padding: '6px 8px' }}>{u.activo ? 'Sí' : 'No'}</td>
+                        <td style={{ padding: '6px 8px' }}>
+                          <button onClick={() => handleBorrarUsuario(u.uid, u.email)} style={{ background: '#ff34fc', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 12px', fontWeight: 700, cursor: 'pointer' }}>Borrar</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

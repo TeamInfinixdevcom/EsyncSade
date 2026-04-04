@@ -1,9 +1,49 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Regla general: solo usuarios autenticados pueden leer y escribir
-    match /{collection}/{document=**} {
-      allow read, write: if request.auth != null;
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/usuarios/$(request.auth.uid));
+    }
+
+    function isActiveUser() {
+      return isSignedIn() && userDoc().data.activo == true;
+    }
+
+    function isAdmin() {
+      return isActiveUser() && userDoc().data.rol == "admin";
+    }
+
+    match /usuarios/{uid} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow create, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /lotes/{loteId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /esims/{esimId} {
+      allow read: if isActiveUser();
+      allow create, delete: if isAdmin();
+      allow update: if isActiveUser()
+        && request.resource.data.serie == resource.data.serie
+        && request.resource.data.loteId == resource.data.loteId
+        && request.resource.data.fechaCarga == resource.data.fechaCarga
+        && (
+          (resource.data.estado == "disponible" && request.resource.data.estado == "usada") ||
+          (resource.data.estado == "usada" && request.resource.data.estado == "disponible")
+        );
+    }
+
+    match /solicitudes/{solicitudId} {
+      allow create: if isActiveUser();
+      allow read: if isAdmin() || (isActiveUser() && resource.data.usuario == request.auth.token.email);
+      allow update, delete: if isAdmin();
     }
   }
 }

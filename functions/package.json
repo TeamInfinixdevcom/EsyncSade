@@ -1,0 +1,12 @@
+{
+  "name": "functions",
+  "private": true,
+  "main": "index.js",
+  "engines": {
+    "node": "22"
+  },
+  "dependencies": {
+    "firebase-admin": "latest",
+    "firebase-functions": "^4.4.1"
+  }
+}

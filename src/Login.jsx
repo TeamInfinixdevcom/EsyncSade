@@ -13,9 +13,11 @@ export default function Login({ onLogin }) {
     setError("");
     try {
       await signInWithEmailAndPassword(auth, email, password);
-      const userProfile = await getUserProfile(email);
+      const firebaseUser = auth.currentUser;
+      const userProfile = await getUserProfile(firebaseUser?.uid);
       if (!userProfile) {
-        setError("Usuario no registrado en Firestore.");
+        await auth.signOut();
+        setError("Usuario no registrado o inactivo.");
         return;
       }
       onLogin(userProfile);

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, getDocs, orderBy, query } from "firebase/firestore";
 import { db } from "./firebase";
 
 export default function TeamRequestsTable() {
@@ -11,7 +11,8 @@ export default function TeamRequestsTable() {
   useEffect(() => {
     async function fetchSolicitudes() {
       setLoading(true);
-      const querySnapshot = await getDocs(collection(db, "solicitudes"));
+      const q = query(collection(db, "solicitudes"), orderBy("fecha", "desc"));
+      const querySnapshot = await getDocs(q);
       setSolicitudes(querySnapshot.docs.map(doc => doc.data()));
       setLoading(false);
     }

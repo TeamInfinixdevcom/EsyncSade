@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "moduleResolution": "node",
+    "checkJs": false,
+    "allowJs": true
+  },
+  "include": [
+    "src",
+    "functions"
+  ]
+}

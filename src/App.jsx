@@ -22,7 +22,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [showSplash, setShowSplash] = useState(true);
 
-  const isAdmin = user?.admin || user?.email === "rmadrigalj@ice.go.cr";
+  const isAdmin = user?.rol === "admin";
 
   /* ========= AUTH ========= */
   useEffect(() => {
@@ -32,7 +32,7 @@ function App() {
       setLoading(true);
 
       if (firebaseUser) {
-        const profile = await getUserProfile(firebaseUser.email);
+        const profile = await getUserProfile(firebaseUser.uid);
         setUser(profile);
       } else {
         setUser(null);
