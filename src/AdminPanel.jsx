@@ -109,7 +109,6 @@ export default function AdminPanel() {
     try {
       const db = getFirestore();
       // Verificar si alguna serie ya existe en esims
-      const existQuery = query(collection(db, "esims"), where("serie", "in", series.slice(0, 10)));
       // Firestore limita a 10 elementos por 'in', así que hacemos chunks
       let existentes = [];
       const CHUNK_SIZE = 10;
