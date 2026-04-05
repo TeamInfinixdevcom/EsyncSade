@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { getFirestore, collection, addDoc, onSnapshot, doc, writeBatch, query, where, getDocs } from "firebase/firestore";
+import { getFirestore, collection, addDoc, onSnapshot, doc, writeBatch, query, where, getDocs, deleteDoc } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { auth, functions } from "./firebase";
 import Dashboard from "./Dashboard";
@@ -131,24 +131,21 @@ export default function AdminPanel() {
         series
       });
       // Subir series en batch, usando la serie como id para evitar duplicados locales
-      const batch = writeBatch(db);
       const now = new Date().toISOString();
-      const chunks = [];
       const CHUNK_SIZE_BATCH = 450;
       for (let i = 0; i < series.length; i += CHUNK_SIZE_BATCH) {
-        chunks.push(series.slice(i, i + CHUNK_SIZE_BATCH));
-      }
-      for (const chunk of chunks) {
+        const chunk = series.slice(i, i + CHUNK_SIZE_BATCH);
+        const chunkBatch = writeBatch(db);
         chunk.forEach((serie) => {
           const ref = doc(db, "esims", serie);
-          batch.set(ref, {
+          chunkBatch.set(ref, {
             serie,
             estado: "disponible",
             fechaCarga: now,
             loteId: loteRef.id
           });
         });
-        await batch.commit();
+        await chunkBatch.commit();
       }
       setMensaje(`Se subieron ${series.length} eSIMs a la nube.`);
       setSeries([]);
@@ -176,20 +173,25 @@ export default function AdminPanel() {
     if (!window.confirm("¿Seguro que deseas borrar este lote y todas sus series?")) return;
     try {
       const db = getFirestore();
-      const batch = writeBatch(db);
       
-      // Buscar y borrar todas las eSIMs del lote
+      // Buscar todas las eSIMs del lote
       const esimsQuery = query(collection(db, "esims"), where("loteId", "==", loteId));
       const esimsSnap = await getDocs(esimsQuery);
       
-      esimsSnap.forEach((docu) => {
-        batch.delete(doc(db, "esims", docu.id));
-      });
+      // Borrar eSIMs en chunks de 450 para respetar el límite de 500 ops por batch
+      const CHUNK_SIZE = 450;
+      const esimDocs = esimsSnap.docs;
+      for (let i = 0; i < esimDocs.length; i += CHUNK_SIZE) {
+        const chunkBatch = writeBatch(db);
+        esimDocs.slice(i, i + CHUNK_SIZE).forEach((docu) => {
+          chunkBatch.delete(doc(db, "esims", docu.id));
+        });
+        await chunkBatch.commit();
+      }
       
       // Borrar el lote
-      batch.delete(doc(db, "lotes", loteId));
+      await deleteDoc(doc(db, "lotes", loteId));
       
-      await batch.commit();
       setMensaje("✅ Lote borrado correctamente.");
     } catch (err) {
       setMensaje("Error al borrar el lote: " + err.message);
