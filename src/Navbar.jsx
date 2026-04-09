@@ -1,7 +1,7 @@
 import React from "react";
 
 export default function Navbar({ onLogout, user, onSelect }) {
-  const isAdmin = user?.rol === "admin";
+  const isAdmin = user?.rol === "admin" || user?.rol === "admin_agencia" || user?.rol === "admin de agencia";
 
   const menuItems = [
     "Solicitar eSIM",

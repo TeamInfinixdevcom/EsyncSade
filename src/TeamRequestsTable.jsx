@@ -1,23 +1,47 @@
 import React, { useEffect, useState } from "react";
-import { collection, getDocs, orderBy, query } from "firebase/firestore";
+import { collection, getDocs, orderBy, query, where } from "firebase/firestore";
 import { db } from "./firebase";
 
-export default function TeamRequestsTable() {
+export default function TeamRequestsTable({ user }) {
   const [solicitudes, setSolicitudes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 10;
+
+  const isAgencyAdmin = user?.rol === "admin_agencia" || user?.rol === "admin de agencia";
+  const agencyFromProfile = (user?.agencia || "").trim();
 
   useEffect(() => {
     async function fetchSolicitudes() {
       setLoading(true);
-      const q = query(collection(db, "solicitudes"), orderBy("fecha", "desc"));
-      const querySnapshot = await getDocs(q);
-      setSolicitudes(querySnapshot.docs.map(doc => doc.data()));
+      setError("");
+
+      if (isAgencyAdmin && !agencyFromProfile) {
+        setSolicitudes([]);
+        setError("Tu usuario admin de agencia no tiene agencia asignada.");
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const solicitudesRef = collection(db, "solicitudes");
+        const q = (isAgencyAdmin && agencyFromProfile)
+          ? query(solicitudesRef, where("agencia", "==", agencyFromProfile))
+          : query(solicitudesRef, orderBy("fecha", "desc"));
+        const querySnapshot = await getDocs(q);
+        const rows = querySnapshot.docs.map(doc => doc.data());
+        if (isAgencyAdmin) {
+          rows.sort((a, b) => new Date(b.fecha || 0) - new Date(a.fecha || 0));
+        }
+        setSolicitudes(rows);
+      } catch (err) {
+        setError(err.message || "Error al cargar solicitudes.");
+      }
       setLoading(false);
     }
     fetchSolicitudes();
-  }, []);
+  }, [isAgencyAdmin, agencyFromProfile]);
 
   // Calcular solicitudes a mostrar en la página actual
   const totalPages = Math.ceil(solicitudes.length / pageSize);
@@ -31,6 +55,8 @@ export default function TeamRequestsTable() {
       <h2>Solicitudes del Equipo</h2>
       {loading ? (
         <div>Cargando...</div>
+      ) : error ? (
+        <div style={{ color: "#ffb4b4" }}>{error}</div>
       ) : (
         <>
           <table style={{ width: "100%", borderCollapse: "collapse", border: '2px solid #00fff7', borderRadius: 12, overflow: 'hidden', background: '#181818', color: '#fff', boxShadow: '0 2px 16px #00fff733' }}>

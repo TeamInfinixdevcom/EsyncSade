@@ -51,6 +51,7 @@ export default function EsimRequestForm() {
           numero,
           cedula,
           usuario,
+          agencia: esimData.agencia || null,
           fecha: new Date().toISOString()
         });
       });

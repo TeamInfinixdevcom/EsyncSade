@@ -22,7 +22,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [showSplash, setShowSplash] = useState(true);
 
-  const isAdmin = user?.rol === "admin";
+  const canAccessAdminPanel = user?.rol === "admin" || user?.rol === "admin_agencia" || user?.rol === "admin de agencia";
 
   /* ========= AUTH ========= */
   useEffect(() => {
@@ -77,11 +77,11 @@ function App() {
     "Solicitar eSIM": <EsimRequestForm />,
     "Devolución eSIMs": <DevolucionEsims />,
     "Mis Solicitudes": <UserReport />,
-    "Panel Admin": isAdmin && (
+    "Panel Admin": canAccessAdminPanel && (
       <>
-        <AdminPanel />
+        <AdminPanel user={user} />
         <div style={{ marginTop: 32 }}>
-          <TeamRequestsTable />
+          <TeamRequestsTable user={user} />
         </div>
       </>
     ),

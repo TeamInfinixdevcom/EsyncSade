@@ -17,23 +17,72 @@ service cloud.firestore {
       return isActiveUser() && userDoc().data.rol == "admin";
     }
 
+    function isAgencyAdmin() {
+      return isActiveUser()
+        && (
+          userDoc().data.rol == "admin_agencia"
+          || userDoc().data.rol == "admin de agencia"
+        );
+    }
+
+    function callerAgency() {
+      return userDoc().data.agencia;
+    }
+
+    function isSameAgency(agencia) {
+      return isAgencyAdmin() && callerAgency() != null && agencia == callerAgency();
+    }
+
     match /usuarios/{uid} {
-      allow read: if isSignedIn() && request.auth.uid == uid;
-      allow create, update: if isAdmin();
-      allow delete: if isAdmin();
+      allow read: if isSignedIn() && (
+        request.auth.uid == uid
+        || isAdmin()
+        || (isAgencyAdmin() && resource.data.agencia == callerAgency())
+      );
+
+      allow create: if isAdmin()
+        || (
+          isAgencyAdmin()
+          && request.resource.data.rol != "admin"
+          && request.resource.data.agencia == callerAgency()
+        );
+
+      allow update: if isAdmin()
+        || (
+          isAgencyAdmin()
+          && resource.data.rol != "admin"
+          && request.resource.data.rol != "admin"
+          && resource.data.agencia == callerAgency()
+          && request.resource.data.agencia == callerAgency()
+        );
+
+      allow delete: if isAdmin()
+        || (
+          isAgencyAdmin()
+          && resource.data.rol != "admin"
+          && resource.data.agencia == callerAgency()
+        );
     }
 
     match /lotes/{loteId} {
-      allow read, write: if isAdmin();
+      allow read: if isAdmin() || isSameAgency(resource.data.agencia);
+      allow create: if isAdmin() || isSameAgency(request.resource.data.agencia);
+      allow update: if isAdmin() || (
+        isSameAgency(resource.data.agencia)
+        && request.resource.data.agencia == callerAgency()
+      );
+      allow delete: if isAdmin() || isSameAgency(resource.data.agencia);
     }
 
     match /esims/{esimId} {
       allow read: if isActiveUser();
-      allow create, delete: if isAdmin();
+      allow create: if isAdmin() || isSameAgency(request.resource.data.agencia);
+      allow delete: if isAdmin() || isSameAgency(resource.data.agencia);
       allow update: if isActiveUser()
         && request.resource.data.serie == resource.data.serie
         && request.resource.data.loteId == resource.data.loteId
         && request.resource.data.fechaCarga == resource.data.fechaCarga
+        && request.resource.data.agencia == resource.data.agencia
         && (
           (resource.data.estado == "disponible" && request.resource.data.estado == "usada") ||
           (resource.data.estado == "usada" && request.resource.data.estado == "disponible")
@@ -42,8 +91,10 @@ service cloud.firestore {
 
     match /solicitudes/{solicitudId} {
       allow create: if isActiveUser();
-      allow read: if isAdmin() || (isActiveUser() && resource.data.usuario == request.auth.token.email);
-      allow update, delete: if isAdmin();
+      allow read: if isAdmin()
+        || (isAgencyAdmin() && resource.data.agencia == callerAgency())
+        || (isActiveUser() && resource.data.usuario == request.auth.token.email);
+      allow update, delete: if isAdmin() || (isAgencyAdmin() && resource.data.agencia == callerAgency());
     }
   }
 }

@@ -11,8 +11,12 @@ function extractSeries(text) {
   return unique.sort();
 }
 
-export default function AdminPanel() {
+export default function AdminPanel({ user }) {
   const PAGE_SIZE = 10;
+  const isGeneralAdmin = user?.rol === "admin";
+  const isAgencyAdmin = user?.rol === "admin_agencia" || user?.rol === "admin de agencia";
+  const agencyFromProfile = (user?.agencia || "").trim();
+
   const [view, setView] = useState("dashboard");
   const [input, setInput] = useState("");
   const [series, setSeries] = useState([]);
@@ -24,12 +28,22 @@ export default function AdminPanel() {
   const [nuevoEmail, setNuevoEmail] = useState("");
   const [nuevoPassword, setNuevoPassword] = useState("");
   const [nuevoRol, setNuevoRol] = useState("ejecutivo");
+  const [nuevoAgencia, setNuevoAgencia] = useState(agencyFromProfile);
   const [nuevoActivo, setNuevoActivo] = useState(true);
   const [mensajeUsuario, setMensajeUsuario] = useState("");
   const [creandoUsuario, setCreandoUsuario] = useState(false);
   const [usuarios, setUsuarios] = useState([]);
   const [cargandoUsuarios, setCargandoUsuarios] = useState(false);
   const [mensajeUsuarios, setMensajeUsuarios] = useState("");
+
+  useEffect(() => {
+    if (isAgencyAdmin) {
+      setNuevoAgencia(agencyFromProfile);
+      if (nuevoRol === "admin") {
+        setNuevoRol("admin_agencia");
+      }
+    }
+  }, [isAgencyAdmin, agencyFromProfile, nuevoRol]);
 
   const fetchUsuarios = async () => {
     setCargandoUsuarios(true);
@@ -57,6 +71,65 @@ export default function AdminPanel() {
     }
   };
 
+  const handleEditarUsuario = async (usuario) => {
+    const nombre = window.prompt("Nombre del usuario:", usuario.nombre || "");
+    if (nombre === null) return;
+
+    const rolPrompt = isGeneralAdmin
+      ? "Rol (admin, admin_agencia, ejecutivo):"
+      : "Rol (admin_agencia, ejecutivo):";
+    const rol = window.prompt(rolPrompt, usuario.rol || "ejecutivo");
+    if (rol === null) return;
+
+    let agencia = usuario.agencia || "";
+    if (isGeneralAdmin) {
+      const agenciaInput = window.prompt("Agencia (vacio para admin general):", usuario.agencia || "");
+      if (agenciaInput === null) return;
+      agencia = agenciaInput;
+    } else {
+      agencia = agencyFromProfile;
+    }
+
+    const activoInput = window.prompt("Activo? (si/no)", usuario.activo ? "si" : "no");
+    if (activoInput === null) return;
+    const activo = !["no", "0", "false", "n"].includes(String(activoInput).trim().toLowerCase());
+
+    setMensajeUsuarios("");
+    try {
+      const updateUser = httpsCallable(functions, "updateUser");
+      const res = await updateUser({
+        uid: usuario.uid,
+        nombre,
+        rol,
+        activo,
+        agencia,
+      });
+      setMensajeUsuarios(res.data?.message || "Usuario actualizado correctamente.");
+      fetchUsuarios();
+    } catch (err) {
+      setMensajeUsuarios(err.message || "Error al editar usuario.");
+    }
+  };
+
+  const handleResetearContrasena = async (usuario) => {
+    const newPassword = window.prompt(`Nueva contrasena para ${usuario.email}:`);
+    if (newPassword === null) return;
+
+    if (!newPassword.trim()) {
+      setMensajeUsuarios("Debes ingresar una nueva contrasena.");
+      return;
+    }
+
+    setMensajeUsuarios("");
+    try {
+      const resetUserPassword = httpsCallable(functions, "resetUserPassword");
+      const res = await resetUserPassword({ uid: usuario.uid, newPassword: newPassword.trim() });
+      setMensajeUsuarios(res.data?.message || "Contrasena restablecida correctamente.");
+    } catch (err) {
+      setMensajeUsuarios(err.message || "Error al restablecer la contrasena.");
+    }
+  };
+
   useEffect(() => {
     if (view === "usuarios") {
       fetchUsuarios();
@@ -76,6 +149,17 @@ export default function AdminPanel() {
       setMensajeUsuario("Completa nombre, email y contrasena.");
       return;
     }
+
+    if (nuevoPassword.length < 6) {
+      setMensajeUsuario("La contrasena debe tener al menos 6 caracteres.");
+      return;
+    }
+
+    if (isAgencyAdmin && !agencyFromProfile) {
+      setMensajeUsuario("Tu usuario admin de agencia no tiene agencia asignada.");
+      return;
+    }
+
     setCreandoUsuario(true);
     try {
       const crearUsuario = httpsCallable(functions, "createUser");
@@ -84,14 +168,17 @@ export default function AdminPanel() {
         email: nuevoEmail,
         password: nuevoPassword,
         rol: nuevoRol,
-        activo: nuevoActivo
+        activo: nuevoActivo,
+        agencia: isAgencyAdmin ? agencyFromProfile : nuevoAgencia,
       });
       setMensajeUsuario(result.data?.message || "Usuario creado correctamente.");
       setNuevoNombre("");
       setNuevoEmail("");
       setNuevoPassword("");
       setNuevoRol("ejecutivo");
+      setNuevoAgencia(isAgencyAdmin ? agencyFromProfile : "");
       setNuevoActivo(true);
+      fetchUsuarios();
     } catch (err) {
       setMensajeUsuario(err.message || "Error al crear usuario.");
     }
@@ -104,6 +191,12 @@ export default function AdminPanel() {
       setMensaje("No hay series para subir.");
       return;
     }
+
+    if (isAgencyAdmin && !agencyFromProfile) {
+      setMensaje("Tu usuario admin de agencia no tiene agencia asignada.");
+      return;
+    }
+
     setSubiendo(true);
     setMensaje("");
     try {
@@ -128,6 +221,7 @@ export default function AdminPanel() {
         fecha: new Date().toISOString(),
         cantidad: series.length,
         usuario: auth.currentUser?.email || "Desconocido",
+        agencia: agencyFromProfile || null,
         series
       });
       // Subir series en batch, usando la serie como id para evitar duplicados locales
@@ -142,7 +236,8 @@ export default function AdminPanel() {
             serie,
             estado: "disponible",
             fechaCarga: now,
-            loteId: loteRef.id
+            loteId: loteRef.id,
+            agencia: agencyFromProfile || null,
           });
         });
         await chunkBatch.commit();
@@ -158,15 +253,25 @@ export default function AdminPanel() {
 
   // Historial de lotes
   useEffect(() => {
+    if (isAgencyAdmin && !agencyFromProfile) {
+      setHistorial([]);
+      return () => {};
+    }
+
     const db = getFirestore();
-    const unsub = onSnapshot(collection(db, "lotes"), (snap) => {
+    const lotesRef = collection(db, "lotes");
+    const lotesQuery = (isAgencyAdmin && agencyFromProfile)
+      ? query(lotesRef, where("agencia", "==", agencyFromProfile))
+      : lotesRef;
+
+    const unsub = onSnapshot(lotesQuery, (snap) => {
       const arr = [];
       snap.forEach(doc => arr.push({ id: doc.id, ...doc.data() }));
       setHistorial(arr.sort((a, b) => new Date(b.fecha) - new Date(a.fecha)));
       setPage(1); // Reset page on new data
     });
     return () => unsub();
-  }, []);
+  }, [isAgencyAdmin, agencyFromProfile]);
 
   // Borrar lote y sus series
   const handleBorrarLote = async (loteId) => {
@@ -175,7 +280,10 @@ export default function AdminPanel() {
       const db = getFirestore();
       
       // Buscar todas las eSIMs del lote
-      const esimsQuery = query(collection(db, "esims"), where("loteId", "==", loteId));
+      const esimsBaseQuery = query(collection(db, "esims"), where("loteId", "==", loteId));
+      const esimsQuery = (isAgencyAdmin && agencyFromProfile)
+        ? query(collection(db, "esims"), where("loteId", "==", loteId), where("agencia", "==", agencyFromProfile))
+        : esimsBaseQuery;
       const esimsSnap = await getDocs(esimsQuery);
       
       // Borrar eSIMs en chunks de 450 para respetar el límite de 500 ops por batch
@@ -291,16 +399,33 @@ export default function AdminPanel() {
       )}
       {view === "usuarios" && (
         <div style={{ width: '100%', maxWidth: 900, margin: "0 auto", background: "#181818", borderRadius: 20, boxShadow: "0 0 32px 4px #ff34fccc", padding: "2.5vw 2vw", color: "#fff", boxSizing: 'border-box' }}>
-          <h2 style={{ color: "#ff34fc", textShadow: '0 2px 12px #ff34fccc, 0 0 2px #fff', fontWeight: 900, letterSpacing: 2 }}>Usuarios del sistema</h2>
+          <h2 style={{ color: "#ff34fc", textShadow: '0 2px 12px #ff34fccc, 0 0 2px #fff', fontWeight: 900, letterSpacing: 2 }}>
+            {isAgencyAdmin ? "Gestión de agentes de agencia" : "Usuarios del sistema"}
+          </h2>
+          {isAgencyAdmin && (
+            <div style={{ marginBottom: 16, color: "#ffe668", fontWeight: 700 }}>
+              Solo puedes crear y administrar usuarios de tu agencia ({agencyFromProfile || "sin agencia"}).
+            </div>
+          )}
           <div style={{ marginBottom: 32 }}>
             <form onSubmit={handleCrearUsuario} style={{ display: 'flex', flexDirection: 'row', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
               <input type="text" placeholder="Nombre" value={nuevoNombre} onChange={e => setNuevoNombre(e.target.value)} style={{ flex: 2, minWidth: 120, padding: 10, borderRadius: 8, border: '1.5px solid #ff34fc', fontSize: 15, background: '#232323', color: '#fff', boxShadow: '0 2px 8px #ff34fc33', outline: 'none' }} />
               <input type="email" placeholder="Email" value={nuevoEmail} onChange={e => setNuevoEmail(e.target.value)} style={{ flex: 2, minWidth: 120, padding: 10, borderRadius: 8, border: '1.5px solid #ff34fc', fontSize: 15, background: '#232323', color: '#fff', boxShadow: '0 2px 8px #ff34fc33', outline: 'none' }} />
               <input type="password" placeholder="Contrasena" value={nuevoPassword} onChange={e => setNuevoPassword(e.target.value)} style={{ flex: 2, minWidth: 120, padding: 10, borderRadius: 8, border: '1.5px solid #ff34fc', fontSize: 15, background: '#232323', color: '#fff', boxShadow: '0 2px 8px #ff34fc33', outline: 'none' }} />
               <select value={nuevoRol} onChange={e => setNuevoRol(e.target.value)} style={{ flex: 1, minWidth: 100, padding: 10, borderRadius: 8, border: '1.5px solid #ff34fc', fontSize: 15, background: '#232323', color: '#fff', boxShadow: '0 2px 8px #ff34fc33', outline: 'none' }}>
-                <option value="ejecutivo">Ejecutivo</option>
-                <option value="admin">Admin</option>
+                <option value="ejecutivo">Agente</option>
+                <option value="admin_agencia">Admin de agencia</option>
+                {isGeneralAdmin && <option value="admin">Admin general</option>}
               </select>
+              {isGeneralAdmin && (
+                <input
+                  type="text"
+                  placeholder="Agencia"
+                  value={nuevoAgencia}
+                  onChange={e => setNuevoAgencia(e.target.value)}
+                  style={{ flex: 1, minWidth: 120, padding: 10, borderRadius: 8, border: '1.5px solid #ff34fc', fontSize: 15, background: '#232323', color: '#fff', boxShadow: '0 2px 8px #ff34fc33', outline: 'none' }}
+                />
+              )}
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#fff', minWidth: 80 }}>
                 <input type="checkbox" checked={nuevoActivo} onChange={e => setNuevoActivo(e.target.checked)} /> Activo
               </label>
@@ -322,6 +447,7 @@ export default function AdminPanel() {
                     <tr style={{ color: '#ff34fc', fontWeight: 700 }}>
                       <th style={{ padding: '6px 8px', textAlign: 'left' }}>Nombre</th>
                       <th style={{ padding: '6px 8px', textAlign: 'left' }}>Email</th>
+                      <th style={{ padding: '6px 8px', textAlign: 'left' }}>Agencia</th>
                       <th style={{ padding: '6px 8px', textAlign: 'left' }}>Rol</th>
                       <th style={{ padding: '6px 8px', textAlign: 'left' }}>Activo</th>
                       <th style={{ padding: '6px 8px', textAlign: 'left' }}>Acciones</th>
@@ -332,9 +458,12 @@ export default function AdminPanel() {
                       <tr key={u.uid} style={{ borderBottom: '1px solid #444' }}>
                         <td style={{ padding: '6px 8px' }}>{u.nombre}</td>
                         <td style={{ padding: '6px 8px' }}>{u.email}</td>
+                        <td style={{ padding: '6px 8px' }}>{u.agencia || '-'}</td>
                         <td style={{ padding: '6px 8px' }}>{u.rol}</td>
                         <td style={{ padding: '6px 8px' }}>{u.activo ? 'Sí' : 'No'}</td>
-                        <td style={{ padding: '6px 8px' }}>
+                        <td style={{ padding: '6px 8px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <button onClick={() => handleEditarUsuario(u)} style={{ background: '#00fff7', color: '#181818', border: 'none', borderRadius: 6, padding: '4px 12px', fontWeight: 700, cursor: 'pointer' }}>Editar</button>
+                          <button onClick={() => handleResetearContrasena(u)} style={{ background: '#ffe668', color: '#181818', border: 'none', borderRadius: 6, padding: '4px 12px', fontWeight: 700, cursor: 'pointer' }}>Reset pass</button>
                           <button onClick={() => handleBorrarUsuario(u.uid, u.email)} style={{ background: '#ff34fc', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 12px', fontWeight: 700, cursor: 'pointer' }}>Borrar</button>
                         </td>
                       </tr>
