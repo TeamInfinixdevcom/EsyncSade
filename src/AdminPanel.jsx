@@ -8,9 +8,7 @@ import Dashboard from "./Dashboard";
 
 function extractSeries(text) {
   const matches = text.match(/\b\d{20}\b/g);
-  if (!matches) return [];
-  const unique = Array.from(new Set(matches));
-  return unique.sort();
+  return matches ? matches.sort() : [];
 }
 
 export default function AdminPanel({ user }) {
@@ -432,49 +430,6 @@ export default function AdminPanel({ user }) {
     setSeries(result);
   };
 
-  const handleCrearUsuario = async (e) => {
-    e.preventDefault();
-    setMensajeUsuario("");
-    if (!nuevoNombre || !nuevoEmail || !nuevoPassword) {
-      setMensajeUsuario("Completa nombre, email y contrasena.");
-      return;
-    }
-
-    if (nuevoPassword.length < 6) {
-      setMensajeUsuario("La contrasena debe tener al menos 6 caracteres.");
-      return;
-    }
-
-    if (isAgencyAdmin && !agencyFromProfile) {
-      setMensajeUsuario("Tu usuario admin de agencia no tiene agencia asignada.");
-      return;
-    }
-
-    setCreandoUsuario(true);
-    try {
-      const crearUsuario = httpsCallable(functions, "createUser");
-      const result = await crearUsuario({
-        nombre: nuevoNombre,
-        email: nuevoEmail,
-        password: nuevoPassword,
-        rol: nuevoRol,
-        activo: nuevoActivo,
-        agencia: isAgencyAdmin ? agencyFromProfile : nuevoAgencia,
-      });
-      setMensajeUsuario(result.data?.message || "Usuario creado correctamente.");
-      setNuevoNombre("");
-      setNuevoEmail("");
-      setNuevoPassword("");
-      setNuevoRol("ejecutivo");
-      setNuevoAgencia(isAgencyAdmin ? agencyFromProfile : "");
-      setNuevoActivo(true);
-      fetchUsuarios();
-    } catch (err) {
-      setMensajeUsuario(err.message || "Error al crear usuario.");
-    }
-    setCreandoUsuario(false);
-  };
-
   // Subir series como lote a Firestore
   const handleSubir = async () => {
     if (series.length === 0) {
@@ -491,21 +446,6 @@ export default function AdminPanel({ user }) {
     setMensaje("");
     try {
       const db = getFirestore();
-      // Verificar si alguna serie ya existe en esims
-      // Firestore limita a 10 elementos por 'in', así que hacemos chunks
-      let existentes = [];
-      const CHUNK_SIZE = 10;
-      for (let i = 0; i < series.length; i += CHUNK_SIZE) {
-        const chunk = series.slice(i, i + CHUNK_SIZE);
-        const q = query(collection(db, "esims"), where("serie", "in", chunk));
-        const snap = await getDocs(q);
-        snap.forEach(docu => existentes.push(docu.id));
-      }
-      if (existentes.length > 0) {
-        setMensaje(`❌ Las siguientes series ya existen y no se subieron: \n${existentes.join(", ")}`);
-        setSubiendo(false);
-        return;
-      }
       // Crear lote
       const loteRef = await addDoc(collection(db, "lotes"), {
         fecha: new Date().toISOString(),
@@ -523,25 +463,19 @@ export default function AdminPanel({ user }) {
           agencia: agenciaCargaActiva,
           loteId: loteRef.id
         });
-        await chunkBatch.commit();
       }
       setMensaje(`Se subieron ${series.length} eSIMs a la agencia ${agenciaCargaActiva}.`);
       setSeries([]);
       setInput("");
       fetchAgencias();
     } catch (err) {
-      setMensaje("Error al subir las series. Intenta de nuevo. " + (err.message || ""));
+      setMensaje("Error al subir las series. Intenta de nuevo.");
     }
     setSubiendo(false);
   };
 
   // Historial de lotes
   useEffect(() => {
-    if (isAgencyAdmin && !agencyFromProfile) {
-      setHistorial([]);
-      return () => {};
-    }
-
     const db = getFirestore();
     const source = generalAdmin
       ? collection(db, "lotes")

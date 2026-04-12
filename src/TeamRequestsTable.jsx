@@ -6,7 +6,6 @@ import { getUserAgency, isGeneralAdmin, sameAgency } from "./userProfile";
 export default function TeamRequestsTable({ user }) {
   const [solicitudes, setSolicitudes] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 10;
   const agenciaUsuario = getUserAgency(user);
@@ -21,9 +20,6 @@ export default function TeamRequestsTable({ user }) {
     }
     return solicitud?.pedido ? "Solicitud" : "Sin pedido";
   };
-
-  const isAgencyAdmin = user?.rol === "admin_agencia" || user?.rol === "admin de agencia";
-  const agencyFromProfile = (user?.agencia || "").trim();
 
   useEffect(() => {
     async function fetchSolicitudes() {
@@ -64,8 +60,6 @@ export default function TeamRequestsTable({ user }) {
       <h2>Solicitudes del Equipo</h2>
       {loading ? (
         <div>Cargando...</div>
-      ) : error ? (
-        <div style={{ color: "#ffb4b4" }}>{error}</div>
       ) : (
         <>
           <div style={{ width: "100%", overflowX: "auto" }}>

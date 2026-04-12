@@ -19,8 +19,7 @@ export default function Login({ onLogin }) {
         email: cred.user.email || email,
       });
       if (!userProfile) {
-        await auth.signOut();
-        setError("Usuario no registrado o inactivo.");
+        setError("Usuario no registrado en Firestore.");
         return;
       }
       onLogin(userProfile);

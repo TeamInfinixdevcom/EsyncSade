@@ -4,15 +4,13 @@
 
 const { initializeApp, cert } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore');
-const { getAuth } = require('firebase-admin/auth');
-const serviceAccount = require('./homewise-77-firebase-adminsdk-fbsvc-afe24f499a.json');
+const serviceAccount = require('./homewise-77-firebase-adminsdk-fbsvc-a50ccbcaf7.json');
 
 initializeApp({
   credential: cert(serviceAccount)
 });
 
 const db = getFirestore();
-const auth = getAuth();
 
 async function crearUsuariosIniciales() {
   const usuarios = [
@@ -37,9 +35,8 @@ async function crearUsuariosIniciales() {
   ];
 
   for (const usuario of usuarios) {
-    const userRecord = await auth.getUserByEmail(usuario.email);
-    await db.collection('usuarios').doc(userRecord.uid).set(usuario, { merge: true });
-    console.log(`Usuario agregado/actualizado: ${usuario.email}`);
+    await db.collection('usuarios').add(usuario);
+    console.log(`Usuario agregado: ${usuario.email}`);
   }
   console.log('Colección de usuarios inicializada.');
 }

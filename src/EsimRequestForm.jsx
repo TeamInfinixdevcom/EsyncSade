@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 
-import { collection, query, where, getDocs, doc, runTransaction, orderBy, limit } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, runTransaction } from "firebase/firestore";
 import { db, auth } from "./firebase";
 import { getUserAgency } from "./userProfile";
 import "./forms.css";
@@ -103,14 +103,7 @@ export default function EsimRequestForm({ user }) {
       setNumero("");
       setCedula("");
     } catch (err) {
-      console.error("[DEBUG] Error en solicitud eSIM:", err);
-      if (err.message && err.message.includes("No hay eSIMs disponibles")) {
-        setMsg("No hay eSIMs disponibles en este momento. Por favor, contacte a un administrador para cargar nuevas series.");
-      } else if (err.message && err.message.includes("Debe iniciar sesión")) {
-        setMsg(err.message);
-      } else {
-        setMsg("Error: " + (err.message || "al enviar la solicitud. Intente cerrar sesión y volver a ingresar."));
-      }
+      setMsg("Error: " + (err.message || "al enviar la solicitud."));
     }
   };
 
