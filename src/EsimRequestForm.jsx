@@ -2,63 +2,106 @@ import React, { useState } from "react";
 
 import { collection, query, where, getDocs, doc, runTransaction, orderBy, limit } from "firebase/firestore";
 import { db, auth } from "./firebase";
+import { getUserAgency } from "./userProfile";
+import "./forms.css";
 
-export default function EsimRequestForm() {
+const REQUEST_MODES = {
+  normal: "normal",
+  komercial: "komercial",
+};
+
+export default function EsimRequestForm({ user }) {
+  const [requestMode, setRequestMode] = useState(REQUEST_MODES.normal);
   const [pedido, setPedido] = useState("");
   const [numero, setNumero] = useState("");
   const [cedula, setCedula] = useState("");
   const [msg, setMsg] = useState("");
 
   const [serieAsignada, setSerieAsignada] = useState("");
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setMsg("");
-    // Validar usuario autenticado
-    if (!auth.currentUser || !auth.currentUser.email) {
-      setMsg("Error: Debe iniciar sesión para solicitar una eSIM. Por favor, cierre sesión y vuelva a ingresar.");
+
+    const pedidoLimpio = pedido.trim();
+    const numeroLimpio = numero.trim();
+    const cedulaLimpia = cedula.trim();
+    const isCambioKomercial = requestMode === REQUEST_MODES.komercial;
+    const agencia = getUserAgency(user);
+
+    if (!agencia) {
+      setMsg("Error: Tu usuario no tiene agencia asignada. Contacta al administrador general.");
       return;
     }
+
+    if (!numeroLimpio || !cedulaLimpia) {
+      setMsg("Error: Debes completar numero y cedula del cliente.");
+      return;
+    }
+
+    if (!isCambioKomercial && !pedidoLimpio) {
+      setMsg("Error: Debes ingresar numero de pedido.");
+      return;
+    }
+
     try {
       let serie = "";
       await runTransaction(db, async (transaction) => {
         const q = query(
           collection(db, "esims"),
           where("estado", "==", "disponible"),
-          orderBy("fechaCarga"),
-          limit(1)
+          where("agencia", "==", agencia)
         );
-        const snap = await transaction.get(q);
-        console.log("[DEBUG] Documentos encontrados:", snap.size);
-        if (snap.empty || !snap.docs || !snap.docs[0]) {
-          console.warn("[DEBUG] No hay eSIMs disponibles o snap.docs[0] es undefined. Snap:", snap);
-          throw new Error("No hay eSIMs disponibles. Por favor, contacte a un administrador para cargar nuevas series.");
-        }
+        const snap = await getDocs(q);
+        if (snap.empty) throw new Error(`No hay eSIMs disponibles en la agencia ${agencia}`);
         const esimDoc = snap.docs[0];
-        if (!esimDoc || !esimDoc.data) {
-          throw new Error("Error inesperado: No se pudo obtener el documento de eSIM disponible.");
-        }
-        const esimData = esimDoc.data();
-        console.log("[DEBUG] Primer doc:", esimData);
-        if (!esimData.serie) {
-          throw new Error("Error inesperado: El documento de eSIM no tiene el campo 'serie'.");
-        }
-        serie = esimData.serie;
-        const usuario = auth.currentUser.email;
-        transaction.update(esimDoc.ref, { estado: "usada", pedido, numero, cedula, fechaUso: new Date().toISOString() });
+        serie = esimDoc.data().serie;
+        const usuario = auth.currentUser?.email || "";
+        const fecha = new Date().toISOString();
+        const tipoGestion = isCambioKomercial ? "cambio_sim_komercial" : "solicitud_normal";
+        const detalleGestion = isCambioKomercial ? "Cambio SIM por Komercial" : "Solicitud con pedido";
+
+        transaction.update(esimDoc.ref, {
+          estado: "usada",
+          pedido: isCambioKomercial ? "" : pedidoLimpio,
+          numero: numeroLimpio,
+          cedula: cedulaLimpia,
+          fechaUso: fecha,
+          agencia,
+          tipoGestion,
+          detalleGestion,
+        });
+
         transaction.set(doc(collection(db, "solicitudes")), {
           serie,
-          pedido,
-          numero,
-          cedula,
+          pedido: isCambioKomercial ? "" : pedidoLimpio,
+          numero: numeroLimpio,
+          cedula: cedulaLimpia,
           usuario,
-          agencia: esimData.agencia || null,
-          fecha: new Date().toISOString()
+          fecha,
+          agencia,
+          tipoGestion,
+          detalleGestion,
+          pedidoPendiente: isCambioKomercial,
         });
       });
+
       setSerieAsignada(serie);
-      navigator.clipboard.writeText(serie);
-      setMsg("Solicitud enviada correctamente. La serie fue copiada al portapapeles.");
-      setPedido(""); setNumero(""); setCedula("");
+      try {
+        await navigator.clipboard.writeText(serie);
+      } catch {
+        // Evita interrumpir el flujo si el navegador bloquea el portapapeles.
+      }
+
+      setMsg(
+        isCambioKomercial
+          ? "Cambio SIM por Komercial registrado. La serie fue copiada al portapapeles."
+          : "Solicitud enviada correctamente. La serie fue copiada al portapapeles."
+      );
+
+      setPedido("");
+      setNumero("");
+      setCedula("");
     } catch (err) {
       console.error("[DEBUG] Error en solicitud eSIM:", err);
       if (err.message && err.message.includes("No hay eSIMs disponibles")) {
@@ -71,40 +114,98 @@ export default function EsimRequestForm() {
     }
   };
 
+  const msgIsError = msg.toLowerCase().startsWith("error");
+  const isCambioKomercial = requestMode === REQUEST_MODES.komercial;
+
   return (
-    <form onSubmit={handleSubmit} style={{ maxWidth: 400, margin: "2rem auto", background: '#181818', borderRadius: 24, boxShadow: '0 0 32px 4px #ff34fccc', border: '2.5px solid #ff34fc', padding: '2rem 1rem' }}>
-      <h2>Solicitar E-SIM</h2>
-      <input
-        type="text"
-        placeholder="Pedido"
-        value={pedido}
-        onChange={e => setPedido(e.target.value)}
-        required
-        style={{ width: "100%", marginBottom: 8 }}
-      />
-      <input
-        type="text"
-        placeholder="Número de cliente"
-        value={numero}
-        onChange={e => setNumero(e.target.value)}
-        required
-        style={{ width: "100%", marginBottom: 8 }}
-      />
-      <input
-        type="text"
-        placeholder="Cédula de cliente"
-        value={cedula}
-        onChange={e => setCedula(e.target.value)}
-        required
-        style={{ width: "100%", marginBottom: 8 }}
-      />
-      <button type="submit" style={{ width: "100%" }}>Solicitar</button>
-      {serieAsignada && (
-        <div style={{ marginTop: 12, color: '#ff34fc', fontWeight: 700 }}>
-          Serie asignada: <span style={{ background: '#232323', padding: '2px 8px', borderRadius: 6 }}>{serieAsignada}</span> (copiada)
+    <div className="form-screen">
+      <form onSubmit={handleSubmit} className="form-card">
+        <p className="form-kicker">Asignacion automatica</p>
+        <h2 className="form-title">Solicitar eSIM</h2>
+        <p className="form-subtitle">
+          Selecciona el tipo de gestion y el sistema asignara la siguiente serie disponible.
+        </p>
+
+        <div className="form-tabs">
+          <button
+            type="button"
+            className={`form-tab ${requestMode === REQUEST_MODES.normal ? "is-active" : ""}`}
+            onClick={() => setRequestMode(REQUEST_MODES.normal)}
+          >
+            Solicitud con pedido
+          </button>
+          <button
+            type="button"
+            className={`form-tab ${requestMode === REQUEST_MODES.komercial ? "is-active" : ""}`}
+            onClick={() => setRequestMode(REQUEST_MODES.komercial)}
+          >
+            Cambio SIM por Komercial
+          </button>
         </div>
-      )}
-      {msg && <div style={{ marginTop: 8 }}>{msg}</div>}
-    </form>
+
+        <div className="form-grid">
+          {!isCambioKomercial ? (
+            <div className="form-field">
+              <label className="form-label" htmlFor="pedido">Numero de pedido</label>
+              <input
+                id="pedido"
+                className="form-input"
+                type="text"
+                placeholder="Ejemplo: PED-000123"
+                value={pedido}
+                onChange={(e) => setPedido(e.target.value)}
+                required
+              />
+            </div>
+          ) : (
+            <p className="form-hint">
+              En este modo no se requiere pedido. El sistema registrara la gestion como Cambio SIM por Komercial.
+            </p>
+          )}
+
+          <div className="form-field">
+            <label className="form-label" htmlFor="numero">Numero de cliente</label>
+            <input
+              id="numero"
+              className="form-input"
+              type="text"
+              placeholder="Ejemplo: 87889999"
+              value={numero}
+              onChange={(e) => setNumero(e.target.value)}
+              required
+            />
+          </div>
+
+          <div className="form-field">
+            <label className="form-label" htmlFor="cedula">Cedula del cliente</label>
+            <input
+              id="cedula"
+              className="form-input"
+              type="text"
+              placeholder="Ejemplo: 1-2345-6789"
+              value={cedula}
+              onChange={(e) => setCedula(e.target.value)}
+              required
+            />
+          </div>
+        </div>
+
+        <button type="submit" className="form-button form-button--primary">
+          {isCambioKomercial ? "Registrar cambio SIM" : "Generar solicitud"}
+        </button>
+
+        {serieAsignada && (
+          <div className="form-feedback is-info">
+            Serie asignada: <span className="form-code">{serieAsignada}</span>
+          </div>
+        )}
+
+        {msg && (
+          <div className={`form-feedback ${msgIsError ? "is-error" : "is-success"}`}>
+            {msg}
+          </div>
+        )}
+      </form>
+    </div>
   );
 }

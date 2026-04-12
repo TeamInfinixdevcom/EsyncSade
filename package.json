@@ -8,11 +8,8 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "install:functions": "cd functions && npm ci",
-    "install:all": "npm ci && npm run install:functions",
-    "deploy:hosting": "npm run build && firebase deploy --only hosting",
-    "deploy:functions": "npm run install:functions && firebase deploy --only functions",
-    "deploy": "npm run build && npm run install:functions && firebase deploy"
+    "backfill:multiagency:dry": "node backfill_multiagency_data.cjs",
+    "backfill:multiagency:apply": "node backfill_multiagency_data.cjs --apply"
   },
   "dependencies": {
     "firebase": "^12.7.0",

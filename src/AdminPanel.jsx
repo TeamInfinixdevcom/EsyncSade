@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from "react";
-import { getFirestore, collection, addDoc, onSnapshot, doc, writeBatch, query, where, getDocs, deleteDoc } from "firebase/firestore";
-import { httpsCallable } from "firebase/functions";
-import { auth, functions } from "./firebase";
+import React, { useState, useEffect, useMemo } from "react";
+import { getFirestore, collection, addDoc, onSnapshot, doc, writeBatch, getDocs, query, where, setDoc, deleteDoc } from "firebase/firestore";
+import { createUserWithEmailAndPassword, getAuth as getSecondaryAuth, sendPasswordResetEmail } from "firebase/auth";
+import { deleteApp, initializeApp } from "firebase/app";
+import { auth, firebaseConfig } from "./firebase";
+import { getUserAgency, isAgencyAdmin, isGeneralAdmin, isUserAdmin, normalizeAgency, sameAgency } from "./userProfile";
 import Dashboard from "./Dashboard";
 
 function extractSeries(text) {
@@ -13,9 +15,10 @@ function extractSeries(text) {
 
 export default function AdminPanel({ user }) {
   const PAGE_SIZE = 10;
-  const isGeneralAdmin = user?.rol === "admin";
-  const isAgencyAdmin = user?.rol === "admin_agencia" || user?.rol === "admin de agencia";
-  const agencyFromProfile = (user?.agencia || "").trim();
+  const generalAdmin = isGeneralAdmin(user);
+  const agencyAdmin = isAgencyAdmin(user) && !generalAdmin;
+  const agenciaAdmin = getUserAgency(user);
+  const currentUserId = user?.id || auth.currentUser?.uid || "";
 
   const [view, setView] = useState("dashboard");
   const [input, setInput] = useState("");
@@ -24,118 +27,405 @@ export default function AdminPanel({ user }) {
   const [mensaje, setMensaje] = useState("");
   const [historial, setHistorial] = useState([]);
   const [page, setPage] = useState(1);
-  const [nuevoNombre, setNuevoNombre] = useState("");
-  const [nuevoEmail, setNuevoEmail] = useState("");
-  const [nuevoPassword, setNuevoPassword] = useState("");
-  const [nuevoRol, setNuevoRol] = useState("ejecutivo");
-  const [nuevoAgencia, setNuevoAgencia] = useState(agencyFromProfile);
-  const [nuevoActivo, setNuevoActivo] = useState(true);
-  const [mensajeUsuario, setMensajeUsuario] = useState("");
-  const [creandoUsuario, setCreandoUsuario] = useState(false);
-  const [usuarios, setUsuarios] = useState([]);
-  const [cargandoUsuarios, setCargandoUsuarios] = useState(false);
-  const [mensajeUsuarios, setMensajeUsuarios] = useState("");
+  const [agentes, setAgentes] = useState([]);
+  const [cargandoAgentes, setCargandoAgentes] = useState(false);
+  const [nombreAgente, setNombreAgente] = useState("");
+  const [emailAgente, setEmailAgente] = useState("");
+  const [passwordAgente, setPasswordAgente] = useState("");
+  const [rolNuevoUsuario, setRolNuevoUsuario] = useState("agente");
+  const [agenciaNuevoUsuario, setAgenciaNuevoUsuario] = useState("");
+  const [creandoAgente, setCreandoAgente] = useState(false);
+  const [mensajeAgente, setMensajeAgente] = useState("");
+  const [agenciasDisponibles, setAgenciasDisponibles] = useState([]);
+  const [agenciaCarga, setAgenciaCarga] = useState("");
+  const [filtroUsuarios, setFiltroUsuarios] = useState("");
+  const [editandoUsuarioId, setEditandoUsuarioId] = useState("");
+  const [editNombreUsuario, setEditNombreUsuario] = useState("");
+  const [editRolUsuario, setEditRolUsuario] = useState("agente");
+  const [editAgenciaUsuario, setEditAgenciaUsuario] = useState("");
+  const [editActivoUsuario, setEditActivoUsuario] = useState(true);
+  const [guardandoUsuario, setGuardandoUsuario] = useState(false);
+  const [vistaAgrupadaAgencias, setVistaAgrupadaAgencias] = useState(true);
+  const [agenciasExpandidas, setAgenciasExpandidas] = useState({});
 
-  useEffect(() => {
-    if (isAgencyAdmin) {
-      setNuevoAgencia(agencyFromProfile);
-      if (nuevoRol === "admin") {
-        setNuevoRol("admin_agencia");
+  const panelWidth =
+    view === "dashboard"
+      ? "min(96vw, 1280px)"
+      : view === "agentes"
+      ? "min(96vw, 1000px)"
+      : "min(96vw, 1120px)";
+
+  const agenciaCargaActiva = generalAdmin ? normalizeAgency(agenciaCarga) : agenciaAdmin;
+
+  const getRoleLabel = (rol) => {
+    if (rol === "admin_general") return "Admin general";
+    if (rol === "admin_agencia") return "Admin agencia";
+    if (rol === "agente") return "Agente";
+    return rol || "Ejecutivo";
+  };
+
+  const usuariosFiltrados = useMemo(() => {
+    const filtro = filtroUsuarios.trim().toLowerCase();
+    if (!filtro) return agentes;
+
+    return agentes.filter((u) =>
+      [u.nombre, u.name, u.email, u.agencia, u.rol]
+        .some((v) => String(v || "").toLowerCase().includes(filtro))
+    );
+  }, [agentes, filtroUsuarios]);
+
+  const gruposUsuariosPorAgencia = useMemo(() => {
+    const grouped = new Map();
+
+    usuariosFiltrados.forEach((usuarioRow) => {
+      const agenciaKey = normalizeAgency(usuarioRow.agencia) || "Sin agencia";
+      if (!grouped.has(agenciaKey)) {
+        grouped.set(agenciaKey, []);
       }
-    }
-  }, [isAgencyAdmin, agencyFromProfile, nuevoRol]);
+      grouped.get(agenciaKey).push(usuarioRow);
+    });
 
-  const fetchUsuarios = async () => {
-    setCargandoUsuarios(true);
-    setMensajeUsuarios("");
-    try {
-      const listUsers = httpsCallable(functions, "listUsers");
-      const res = await listUsers();
-      setUsuarios(res.data.usuarios || []);
-    } catch (err) {
-      setMensajeUsuarios(err.message || "Error al obtener usuarios.");
-    }
-    setCargandoUsuarios(false);
+    return Array.from(grouped.entries()).sort((a, b) => {
+      if (a[0] === "Sin agencia") return -1;
+      if (b[0] === "Sin agencia") return 1;
+      return a[0].localeCompare(b[0]);
+    });
+  }, [usuariosFiltrados]);
+
+  const iniciarEdicionUsuario = (usuarioRow) => {
+    setEditandoUsuarioId(usuarioRow.id);
+    setEditNombreUsuario((usuarioRow.nombre || usuarioRow.name || "").trim());
+    setEditRolUsuario(usuarioRow.rol || "agente");
+    setEditAgenciaUsuario(normalizeAgency(usuarioRow.agencia));
+    setEditActivoUsuario(usuarioRow.activo !== false);
+    setMensajeAgente("");
   };
 
-  const handleBorrarUsuario = async (uid, email) => {
-    if (!window.confirm(`¿Seguro que deseas borrar el usuario ${email}?`)) return;
-    setMensajeUsuarios("");
-    try {
-      const deleteUser = httpsCallable(functions, "deleteUser");
-      await deleteUser({ uid });
-      setMensajeUsuarios("Usuario eliminado correctamente.");
-      fetchUsuarios();
-    } catch (err) {
-      setMensajeUsuarios(err.message || "Error al borrar usuario.");
-    }
+  const cancelarEdicionUsuario = () => {
+    setEditandoUsuarioId("");
+    setEditNombreUsuario("");
+    setEditRolUsuario("agente");
+    setEditAgenciaUsuario("");
+    setEditActivoUsuario(true);
   };
 
-  const handleEditarUsuario = async (usuario) => {
-    const nombre = window.prompt("Nombre del usuario:", usuario.nombre || "");
-    if (nombre === null) return;
+  const guardarEdicionUsuario = async (usuarioRow) => {
+    const nombre = editNombreUsuario.trim();
+    const rol = generalAdmin ? editRolUsuario : "agente";
+    const agencia = generalAdmin
+      ? normalizeAgency(editAgenciaUsuario)
+      : agenciaAdmin;
 
-    const rolPrompt = isGeneralAdmin
-      ? "Rol (admin, admin_agencia, ejecutivo):"
-      : "Rol (admin_agencia, ejecutivo):";
-    const rol = window.prompt(rolPrompt, usuario.rol || "ejecutivo");
-    if (rol === null) return;
-
-    let agencia = usuario.agencia || "";
-    if (isGeneralAdmin) {
-      const agenciaInput = window.prompt("Agencia (vacio para admin general):", usuario.agencia || "");
-      if (agenciaInput === null) return;
-      agencia = agenciaInput;
-    } else {
-      agencia = agencyFromProfile;
-    }
-
-    const activoInput = window.prompt("Activo? (si/no)", usuario.activo ? "si" : "no");
-    if (activoInput === null) return;
-    const activo = !["no", "0", "false", "n"].includes(String(activoInput).trim().toLowerCase());
-
-    setMensajeUsuarios("");
-    try {
-      const updateUser = httpsCallable(functions, "updateUser");
-      const res = await updateUser({
-        uid: usuario.uid,
-        nombre,
-        rol,
-        activo,
-        agencia,
-      });
-      setMensajeUsuarios(res.data?.message || "Usuario actualizado correctamente.");
-      fetchUsuarios();
-    } catch (err) {
-      setMensajeUsuarios(err.message || "Error al editar usuario.");
-    }
-  };
-
-  const handleResetearContrasena = async (usuario) => {
-    const newPassword = window.prompt(`Nueva contrasena para ${usuario.email}:`);
-    if (newPassword === null) return;
-
-    if (!newPassword.trim()) {
-      setMensajeUsuarios("Debes ingresar una nueva contrasena.");
+    if (!nombre) {
+      setMensajeAgente("El nombre no puede quedar vacío.");
       return;
     }
 
-    setMensajeUsuarios("");
+    if (!["agente", "admin_agencia", "admin_general"].includes(rol)) {
+      setMensajeAgente("Rol inválido para actualización.");
+      return;
+    }
+
+    if (rol !== "admin_general" && !agencia) {
+      setMensajeAgente("Debes indicar una agencia para este usuario.");
+      return;
+    }
+
+    if (agencyAdmin && !sameAgency(agencia, agenciaAdmin)) {
+      setMensajeAgente("No puedes mover usuarios fuera de tu agencia.");
+      return;
+    }
+
+    setGuardandoUsuario(true);
+    setMensajeAgente("");
+
     try {
-      const resetUserPassword = httpsCallable(functions, "resetUserPassword");
-      const res = await resetUserPassword({ uid: usuario.uid, newPassword: newPassword.trim() });
-      setMensajeUsuarios(res.data?.message || "Contrasena restablecida correctamente.");
+      const db = getFirestore();
+      const esAdminGeneral = rol === "admin_general";
+      const esAdminAgencia = rol === "admin_agencia";
+
+      await setDoc(
+        doc(db, "usuarios", usuarioRow.id),
+        {
+          nombre,
+          name: nombre,
+          rol,
+          adminGeneral: esAdminGeneral,
+          adminAgencia: esAdminAgencia,
+          admin: esAdminGeneral || esAdminAgencia,
+          agencia: esAdminGeneral ? "" : agencia,
+          activo: !!editActivoUsuario,
+          fechaActualizacion: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+
+      setMensajeAgente(`Usuario ${usuarioRow.email} actualizado correctamente.`);
+      cancelarEdicionUsuario();
+      fetchAgentes();
+      fetchAgencias();
     } catch (err) {
-      setMensajeUsuarios(err.message || "Error al restablecer la contrasena.");
+      setMensajeAgente("No se pudo actualizar el usuario.");
+    }
+
+    setGuardandoUsuario(false);
+  };
+
+  const puedeAdministrarAgente = (usuarioRow) => {
+    const rol = String(usuarioRow?.rol || "").trim().toLowerCase();
+    const mismaAgencia = sameAgency(usuarioRow?.agencia, agenciaAdmin);
+
+    if (generalAdmin) return true;
+    return agencyAdmin && rol === "agente" && mismaAgencia;
+  };
+
+  const handleEliminarUsuario = async (usuarioRow) => {
+    const esUsuarioActual = currentUserId && usuarioRow.id === currentUserId;
+    if (esUsuarioActual) {
+      setMensajeAgente("No puedes eliminar tu propio usuario.");
+      return;
+    }
+
+    if (!puedeAdministrarAgente(usuarioRow)) {
+      setMensajeAgente("No tienes permiso para eliminar este usuario.");
+      return;
+    }
+
+    const email = usuarioRow.email || usuarioRow.nombre || "este usuario";
+    if (!window.confirm(`¿Seguro que deseas eliminar a ${email}?`)) return;
+
+    try {
+      const db = getFirestore();
+      await deleteDoc(doc(db, "usuarios", usuarioRow.id));
+      setMensajeAgente(`Usuario ${email} eliminado correctamente.`);
+      fetchAgentes();
+      fetchAgencias();
+    } catch (err) {
+      setMensajeAgente("No se pudo eliminar el usuario.");
     }
   };
 
+  const handleResetPasswordUsuario = async (usuarioRow) => {
+    const esUsuarioActual = currentUserId && usuarioRow.id === currentUserId;
+    if (esUsuarioActual) {
+      setMensajeAgente("No puedes resetear la contraseña de tu propio usuario desde este panel.");
+      return;
+    }
+
+    if (!puedeAdministrarAgente(usuarioRow)) {
+      setMensajeAgente("No tienes permiso para resetear la contraseña de este usuario.");
+      return;
+    }
+
+    if (!usuarioRow?.email) {
+      setMensajeAgente("El usuario no tiene correo registrado.");
+      return;
+    }
+
+    try {
+      await sendPasswordResetEmail(auth, usuarioRow.email);
+      setMensajeAgente(`Se envió correo de restablecimiento a ${usuarioRow.email}.`);
+    } catch (err) {
+      if (err?.code === "auth/user-not-found") {
+        setMensajeAgente("No existe usuario de Auth para ese correo.");
+      } else {
+        setMensajeAgente(`No se pudo enviar el correo de restablecimiento. ${err?.message || ""}`);
+      }
+    }
+  };
+
+  const fetchAgentes = async () => {
+    setCargandoAgentes(true);
+    setMensajeAgente("");
+    try {
+      const db = getFirestore();
+      const source = generalAdmin
+        ? collection(db, "usuarios")
+        : query(collection(db, "usuarios"), where("agencia", "==", agenciaAdmin));
+      const snap = await getDocs(source);
+      const rows = snap.docs
+        .map((docu) => ({ id: docu.id, ...docu.data() }))
+        .filter((u) => {
+          if (generalAdmin) return true;
+          if (agencyAdmin) return sameAgency(u.agencia, agenciaAdmin) && !isUserAdmin(u);
+          return false;
+        })
+        .sort((a, b) => new Date(b.fechaCreacion || b.fecha || 0) - new Date(a.fechaCreacion || a.fecha || 0));
+      setAgentes(rows);
+    } catch (err) {
+      setMensajeAgente("No se pudo cargar la lista de agentes.");
+    }
+    setCargandoAgentes(false);
+  };
+
+  const fetchAgencias = async () => {
+    if (!generalAdmin) {
+      const agencia = normalizeAgency(agenciaAdmin);
+      setAgenciasDisponibles(agencia ? [agencia] : []);
+      return;
+    }
+
+    const setAgencias = new Set();
+
+    if (agenciaAdmin) {
+      setAgencias.add(agenciaAdmin);
+    }
+
+    try {
+      const db = getFirestore();
+      const [usuariosSnap, lotesSnap] = await Promise.all([
+        getDocs(collection(db, "usuarios")),
+        getDocs(collection(db, "lotes")),
+      ]);
+
+      usuariosSnap.forEach((docu) => {
+        const agencia = normalizeAgency(docu.data().agencia);
+        if (agencia) setAgencias.add(agencia);
+      });
+
+      lotesSnap.forEach((docu) => {
+        const agencia = normalizeAgency(docu.data().agencia);
+        if (agencia) setAgencias.add(agencia);
+      });
+
+      const agenciasOrdenadas = Array.from(setAgencias).sort((a, b) => a.localeCompare(b));
+      setAgenciasDisponibles(agenciasOrdenadas);
+
+      if (generalAdmin && !agenciaCarga && agenciasOrdenadas.length > 0) {
+        setAgenciaCarga(agenciasOrdenadas[0]);
+      }
+    } catch {
+      const agenciasOrdenadas = Array.from(setAgencias).sort((a, b) => a.localeCompare(b));
+      setAgenciasDisponibles(agenciasOrdenadas);
+    }
+  };
+
+  const handleCrearAgente = async (e) => {
+    e.preventDefault();
+    const nombre = nombreAgente.trim();
+    const email = emailAgente.trim().toLowerCase();
+    const rolAsignado = generalAdmin ? rolNuevoUsuario : "agente";
+    const agenciaAsignada = generalAdmin ? normalizeAgency(agenciaNuevoUsuario || agenciaCargaActiva) : agenciaAdmin;
+
+    if (!nombre || !email || !passwordAgente) {
+      setMensajeAgente("Completa nombre, correo y contraseña.");
+      return;
+    }
+
+    if (!agenciaAsignada) {
+      setMensajeAgente("Debes indicar la agencia del usuario.");
+      return;
+    }
+
+    if (!["agente", "admin_agencia"].includes(rolAsignado)) {
+      setMensajeAgente("Rol no permitido.");
+      return;
+    }
+
+    if (passwordAgente.length < 6) {
+      setMensajeAgente("La contraseña debe tener al menos 6 caracteres.");
+      return;
+    }
+
+    setCreandoAgente(true);
+    setMensajeAgente("");
+
+    try {
+      const db = getFirestore();
+      const existingQuery = generalAdmin
+        ? query(collection(db, "usuarios"), where("email", "==", email))
+        : query(collection(db, "usuarios"), where("email", "==", email), where("agencia", "==", agenciaAsignada));
+      const existente = await getDocs(existingQuery);
+      if (!existente.empty) {
+        setMensajeAgente("Ese correo ya está registrado en el sistema.");
+        setCreandoAgente(false);
+        return;
+      }
+
+      const secondaryApp = initializeApp(firebaseConfig, `agent-creator-${Date.now()}`);
+      let uid = "";
+      try {
+        const secondaryAuth = getSecondaryAuth(secondaryApp);
+        const cred = await createUserWithEmailAndPassword(secondaryAuth, email, passwordAgente);
+        uid = cred.user.uid;
+        await secondaryAuth.signOut();
+      } finally {
+        await deleteApp(secondaryApp);
+      }
+
+      await setDoc(
+        doc(db, "usuarios", uid),
+        {
+          name: nombre,
+          nombre,
+          email,
+          admin: false,
+          adminGeneral: false,
+          adminAgencia: rolAsignado === "admin_agencia",
+          rol: rolAsignado,
+          agencia: agenciaAsignada,
+          activo: true,
+          fechaCreacion: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+
+      setMensajeAgente(
+        rolAsignado === "admin_agencia"
+          ? `Administrador de agencia creado para ${agenciaAsignada}.`
+          : `Agente creado en la agencia ${agenciaAsignada}.`
+      );
+      setNombreAgente("");
+      setEmailAgente("");
+      setPasswordAgente("");
+      if (generalAdmin) {
+        setRolNuevoUsuario("agente");
+        setAgenciaNuevoUsuario("");
+      }
+      fetchAgentes();
+      fetchAgencias();
+    } catch (err) {
+      if (err?.code === "auth/email-already-in-use") {
+        setMensajeAgente("El correo ya existe en Firebase Auth.");
+      } else if (err?.code === "auth/weak-password") {
+        setMensajeAgente("La contraseña es demasiado débil.");
+      } else {
+        setMensajeAgente(`No se pudo crear el agente. ${err?.message || ""}`);
+      }
+    }
+
+    setCreandoAgente(false);
+  };
+
   useEffect(() => {
-    if (view === "usuarios") {
-      fetchUsuarios();
+    fetchAgencias();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [generalAdmin, agenciaAdmin]);
+
+  useEffect(() => {
+    if (view === "agentes") {
+      fetchAgentes();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view]);
+  }, [view, generalAdmin, agenciaAdmin]);
+
+  useEffect(() => {
+    if (!generalAdmin) return;
+
+    setAgenciasExpandidas((prev) => {
+      let changed = false;
+      const next = { ...prev };
+
+      gruposUsuariosPorAgencia.forEach(([agencia]) => {
+        if (typeof next[agencia] === "undefined") {
+          next[agencia] = true;
+          changed = true;
+        }
+      });
+
+      return changed ? next : prev;
+    });
+  }, [generalAdmin, gruposUsuariosPorAgencia]);
 
   const handleExtract = () => {
     const result = extractSeries(input);
@@ -192,8 +482,8 @@ export default function AdminPanel({ user }) {
       return;
     }
 
-    if (isAgencyAdmin && !agencyFromProfile) {
-      setMensaje("Tu usuario admin de agencia no tiene agencia asignada.");
+    if (!agenciaCargaActiva) {
+      setMensaje("Debes seleccionar una agencia para cargar eSIMs.");
       return;
     }
 
@@ -221,30 +511,24 @@ export default function AdminPanel({ user }) {
         fecha: new Date().toISOString(),
         cantidad: series.length,
         usuario: auth.currentUser?.email || "Desconocido",
-        agencia: agencyFromProfile || null,
+        agencia: agenciaCargaActiva,
         series
       });
-      // Subir series en batch, usando la serie como id para evitar duplicados locales
-      const now = new Date().toISOString();
-      const CHUNK_SIZE_BATCH = 450;
-      for (let i = 0; i < series.length; i += CHUNK_SIZE_BATCH) {
-        const chunk = series.slice(i, i + CHUNK_SIZE_BATCH);
-        const chunkBatch = writeBatch(db);
-        chunk.forEach((serie) => {
-          const ref = doc(db, "esims", serie);
-          chunkBatch.set(ref, {
-            serie,
-            estado: "disponible",
-            fechaCarga: now,
-            loteId: loteRef.id,
-            agencia: agencyFromProfile || null,
-          });
+      // Subir cada serie como documento en la colección 'esims', guardando el id del lote
+      for (const serie of series) {
+        await addDoc(collection(db, "esims"), {
+          serie,
+          estado: "disponible",
+          fechaCarga: new Date().toISOString(),
+          agencia: agenciaCargaActiva,
+          loteId: loteRef.id
         });
         await chunkBatch.commit();
       }
-      setMensaje(`Se subieron ${series.length} eSIMs a la nube.`);
+      setMensaje(`Se subieron ${series.length} eSIMs a la agencia ${agenciaCargaActiva}.`);
       setSeries([]);
       setInput("");
+      fetchAgencias();
     } catch (err) {
       setMensaje("Error al subir las series. Intenta de nuevo. " + (err.message || ""));
     }
@@ -259,56 +543,219 @@ export default function AdminPanel({ user }) {
     }
 
     const db = getFirestore();
-    const lotesRef = collection(db, "lotes");
-    const lotesQuery = (isAgencyAdmin && agencyFromProfile)
-      ? query(lotesRef, where("agencia", "==", agencyFromProfile))
-      : lotesRef;
+    const source = generalAdmin
+      ? collection(db, "lotes")
+      : query(collection(db, "lotes"), where("agencia", "==", agenciaAdmin));
 
-    const unsub = onSnapshot(lotesQuery, (snap) => {
+    const unsub = onSnapshot(source, (snap) => {
       const arr = [];
       snap.forEach(doc => arr.push({ id: doc.id, ...doc.data() }));
-      setHistorial(arr.sort((a, b) => new Date(b.fecha) - new Date(a.fecha)));
+      const filtrado = arr
+        .filter((lote) => {
+          if (generalAdmin) {
+            if (!agenciaCargaActiva) return true;
+            return sameAgency(lote.agencia, agenciaCargaActiva);
+          }
+          return sameAgency(lote.agencia, agenciaAdmin);
+        })
+        .sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+
+      setHistorial(filtrado);
       setPage(1); // Reset page on new data
     });
     return () => unsub();
-  }, [isAgencyAdmin, agencyFromProfile]);
+  }, [generalAdmin, agenciaAdmin, agenciaCargaActiva]);
 
   // Borrar lote y sus series
-  const handleBorrarLote = async (loteId) => {
-    if (!window.confirm("¿Seguro que deseas borrar este lote y todas sus series?")) return;
-    try {
-      const db = getFirestore();
-      
-      // Buscar todas las eSIMs del lote
-      const esimsBaseQuery = query(collection(db, "esims"), where("loteId", "==", loteId));
-      const esimsQuery = (isAgencyAdmin && agencyFromProfile)
-        ? query(collection(db, "esims"), where("loteId", "==", loteId), where("agencia", "==", agencyFromProfile))
-        : esimsBaseQuery;
-      const esimsSnap = await getDocs(esimsQuery);
-      
-      // Borrar eSIMs en chunks de 450 para respetar el límite de 500 ops por batch
-      const CHUNK_SIZE = 450;
-      const esimDocs = esimsSnap.docs;
-      for (let i = 0; i < esimDocs.length; i += CHUNK_SIZE) {
-        const chunkBatch = writeBatch(db);
-        esimDocs.slice(i, i + CHUNK_SIZE).forEach((docu) => {
-          chunkBatch.delete(doc(db, "esims", docu.id));
-        });
-        await chunkBatch.commit();
-      }
-      
-      // Borrar el lote
-      await deleteDoc(doc(db, "lotes", loteId));
-      
-      setMensaje("✅ Lote borrado correctamente.");
-    } catch (err) {
-      setMensaje("Error al borrar el lote: " + err.message);
+  const handleBorrarLote = async (lote) => {
+    const loteId = lote?.id;
+    if (!loteId) return;
+
+    if (!generalAdmin && !sameAgency(lote.agencia, agenciaAdmin)) {
+      setMensaje("No puedes borrar lotes de otra agencia.");
+      return;
     }
+
+    if (!window.confirm("¿Seguro que deseas borrar este lote y todas sus series?")) return;
+    const db = getFirestore();
+    // Borrar series asociadas
+    const batch = writeBatch(db);
+    const esimsQuery = query(collection(db, "esims"), where("loteId", "==", loteId));
+    const esimsSnap = await getDocs(esimsQuery);
+    esimsSnap.forEach((docu) => {
+      batch.delete(doc(db, "esims", docu.id));
+    });
+
+    batch.delete(doc(db, "lotes", loteId));
+    await batch.commit();
+    setMensaje("Lote borrado correctamente.");
   };
 
+  const alternarGrupoAgencia = (agencia) => {
+    setAgenciasExpandidas((prev) => ({
+      ...prev,
+      [agencia]: prev[agencia] === false,
+    }));
+  };
+
+  const cambiarExpansionGlobal = (expandir) => {
+    setAgenciasExpandidas((prev) => {
+      const next = { ...prev };
+      gruposUsuariosPorAgencia.forEach(([agencia]) => {
+        next[agencia] = expandir;
+      });
+      return next;
+    });
+  };
+
+  const renderUsuarioRow = (a) => {
+    const estaEditando = editandoUsuarioId === a.id;
+    const esUsuarioActual = currentUserId && a.id === currentUserId;
+    const puedeEditarFila = generalAdmin ? !esUsuarioActual : true;
+    const puedeEliminarFila = !esUsuarioActual && puedeAdministrarAgente(a);
+    const puedeResetearFila = !!a.email && !esUsuarioActual && puedeAdministrarAgente(a);
+
+    return (
+      <tr key={a.id}>
+        <td style={{ padding: 8, borderBottom: "1px solid #3b3b3b" }}>
+          {estaEditando ? (
+            <input
+              type="text"
+              value={editNombreUsuario}
+              onChange={(e) => setEditNombreUsuario(e.target.value)}
+              style={{ width: "100%", padding: 6, borderRadius: 6, border: "1px solid #ffe066", background: "#181818", color: "#fff" }}
+            />
+          ) : (a.nombre || a.name || "-")}
+        </td>
+        <td style={{ padding: 8, borderBottom: "1px solid #3b3b3b" }}>{a.email || "-"}</td>
+        <td style={{ padding: 8, borderBottom: "1px solid #3b3b3b" }}>
+          {estaEditando ? (
+            editRolUsuario === "admin_general" ? (
+              <span>-</span>
+            ) : (
+              <input
+                list="agencias-edicion"
+                type="text"
+                value={generalAdmin ? editAgenciaUsuario : agenciaAdmin}
+                onChange={(e) => setEditAgenciaUsuario(e.target.value)}
+                disabled={!generalAdmin}
+                style={{ width: "100%", padding: 6, borderRadius: 6, border: "1px solid #ffe066", background: "#181818", color: "#fff" }}
+              />
+            )
+          ) : (
+            <span style={{ color: a.agencia ? "#fff" : "#ffd2a6", fontWeight: a.agencia ? 500 : 800 }}>
+              {a.agencia || "Sin agencia"}
+            </span>
+          )}
+        </td>
+        <td style={{ padding: 8, borderBottom: "1px solid #3b3b3b" }}>
+          {estaEditando ? (
+            generalAdmin ? (
+              <select
+                value={editRolUsuario}
+                onChange={(e) => setEditRolUsuario(e.target.value)}
+                style={{ width: "100%", padding: 6, borderRadius: 6, border: "1px solid #ffe066", background: "#181818", color: "#fff" }}
+              >
+                <option value="agente">Agente</option>
+                <option value="admin_agencia">Admin agencia</option>
+                <option value="admin_general">Admin general</option>
+              </select>
+            ) : (
+              <span>Agente</span>
+            )
+          ) : getRoleLabel(a.rol)}
+        </td>
+        <td style={{ padding: 8, borderBottom: "1px solid #3b3b3b" }}>
+          {estaEditando ? (
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <input
+                type="checkbox"
+                checked={editActivoUsuario}
+                onChange={(e) => setEditActivoUsuario(e.target.checked)}
+              />
+              {editActivoUsuario ? "Sí" : "No"}
+            </label>
+          ) : (a.activo === false ? "No" : "Sí")}
+        </td>
+        <td style={{ padding: 8, borderBottom: "1px solid #3b3b3b" }}>{a.fechaCreacion ? new Date(a.fechaCreacion).toLocaleString() : "-"}</td>
+        <td style={{ padding: 8, borderBottom: "1px solid #3b3b3b" }}>
+          {estaEditando ? (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => guardarEdicionUsuario(a)}
+                disabled={guardandoUsuario}
+                style={{ background: "#00d1b2", color: "#04151a", border: "none", borderRadius: 6, padding: "4px 10px", fontWeight: 700, cursor: guardandoUsuario ? "not-allowed" : "pointer" }}
+              >
+                {guardandoUsuario ? "Guardando..." : "Guardar"}
+              </button>
+              <button
+                type="button"
+                onClick={cancelarEdicionUsuario}
+                disabled={guardandoUsuario}
+                style={{ background: "#555", color: "#fff", border: "none", borderRadius: 6, padding: "4px 10px", fontWeight: 700, cursor: guardandoUsuario ? "not-allowed" : "pointer" }}
+              >
+                Cancelar
+              </button>
+            </div>
+          ) : puedeEditarFila ? (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => iniciarEdicionUsuario(a)}
+                style={{ background: "#ffe066", color: "#181818", border: "none", borderRadius: 6, padding: "4px 10px", fontWeight: 700, cursor: "pointer" }}
+              >
+                Editar
+              </button>
+              {puedeResetearFila && (
+                <button
+                  type="button"
+                  onClick={() => handleResetPasswordUsuario(a)}
+                  style={{ background: "#00d1b2", color: "#04151a", border: "none", borderRadius: 6, padding: "4px 10px", fontWeight: 700, cursor: "pointer" }}
+                >
+                  Reset pass
+                </button>
+              )}
+              {puedeEliminarFila && (
+                <button
+                  type="button"
+                  onClick={() => handleEliminarUsuario(a)}
+                  style={{ background: "#ff5f56", color: "#fff", border: "none", borderRadius: 6, padding: "4px 10px", fontWeight: 700, cursor: "pointer" }}
+                >
+                  Eliminar
+                </button>
+              )}
+            </div>
+          ) : (
+            <span style={{ color: "#ffd58c", fontWeight: 700 }}>Tu usuario</span>
+          )}
+        </td>
+      </tr>
+    );
+  };
+
+  const renderUsuariosTable = (rows) => (
+    <table style={{ width: "100%", borderCollapse: "collapse", background: "#232323", borderRadius: 12, overflow: "hidden" }}>
+      <thead>
+        <tr style={{ background: "#ffe06622", color: "#fff" }}>
+          <th style={{ textAlign: "left", padding: 8 }}>Nombre</th>
+          <th style={{ textAlign: "left", padding: 8 }}>Correo</th>
+          <th style={{ textAlign: "left", padding: 8 }}>Agencia</th>
+          <th style={{ textAlign: "left", padding: 8 }}>Rol</th>
+          <th style={{ textAlign: "left", padding: 8 }}>Activo</th>
+          <th style={{ textAlign: "left", padding: 8 }}>Fecha alta</th>
+          <th style={{ textAlign: "left", padding: 8 }}>Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => renderUsuarioRow(row))}
+      </tbody>
+    </table>
+  );
+
   return (
-    <div style={{ maxWidth: 600, margin: "32px auto", background: "#181818", borderRadius: 24, boxShadow: "0 0 32px 4px #ff34fccc", border: '2.5px solid #ff34fc', padding: "2rem 1rem", color: "#fff" }}>
-      <div style={{ display: "flex", gap: 16, marginBottom: 32, justifyContent: 'center' }}>
+    <div style={{ width: panelWidth, margin: "32px auto", background: "#181818", borderRadius: 24, boxShadow: "0 0 32px 4px #ff34fccc", border: "2.5px solid #ff34fc", padding: "1.6rem 1rem", color: "#fff", boxSizing: "border-box" }}>
+      <div style={{ display: "flex", gap: 16, marginBottom: 24, justifyContent: "center", flexWrap: "wrap" }}>
         <button
           onClick={() => setView("dashboard")}
           style={{ background: view === "dashboard" ? "#00fff7" : "#232323", color: view === "dashboard" ? "#181818" : "#00fff7", border: 'none', borderRadius: 12, padding: '0.7rem 2rem', fontWeight: 900, fontSize: 18, boxShadow: view === "dashboard" ? '0 2px 16px #00fff7cc' : 'none', cursor: 'pointer', letterSpacing: 1, textShadow: view === "dashboard" ? '0 1px 8px #fff' : '0 1px 8px #00fff7cc' }}
@@ -318,16 +765,38 @@ export default function AdminPanel({ user }) {
           style={{ background: view === "series" ? "#bd34fe" : "#232323", color: view === "series" ? "#fff" : "#bd34fe", border: 'none', borderRadius: 12, padding: '0.7rem 2rem', fontWeight: 900, fontSize: 18, boxShadow: view === "series" ? '0 2px 16px #bd34fecc' : 'none', cursor: 'pointer', letterSpacing: 1, textShadow: view === "series" ? '0 1px 8px #fff' : '0 1px 8px #bd34fecc' }}
         >Carga de Series</button>
         <button
-          onClick={() => setView("usuarios")}
-          style={{ background: view === "usuarios" ? "#ff34fc" : "#232323", color: view === "usuarios" ? "#fff" : "#ff34fc", border: 'none', borderRadius: 12, padding: '0.7rem 2rem', fontWeight: 900, fontSize: 18, boxShadow: view === "usuarios" ? '0 2px 16px #ff34fccc' : 'none', cursor: 'pointer', letterSpacing: 1, textShadow: view === "usuarios" ? '0 1px 8px #fff' : '0 1px 8px #ff34fccc' }}
+          onClick={() => setView("agentes")}
+          style={{ background: view === "agentes" ? "#ffe066" : "#232323", color: view === "agentes" ? "#181818" : "#ffe066", border: 'none', borderRadius: 12, padding: '0.7rem 2rem', fontWeight: 900, fontSize: 18, boxShadow: view === "agentes" ? '0 2px 16px #ffe066cc' : 'none', cursor: 'pointer', letterSpacing: 1, textShadow: view === "agentes" ? '0 1px 8px #fff' : '0 1px 8px #ffe066cc' }}
         >Usuarios</button>
       </div>
       {view === "dashboard" && (
-        <Dashboard />
+        <Dashboard user={user} />
       )}
       {view === "series" && (
         <div style={{ width: '100%', maxWidth: 1100, margin: "0 auto", background: "#181818", borderRadius: 20, boxShadow: "0 0 32px 4px #bd34fecc", padding: "2.5vw 2vw", color: "#fff", boxSizing: 'border-box' }}>
           <h2 style={{ color: "#bd34fe", textShadow: '0 2px 12px #bd34fecc, 0 0 2px #fff', fontWeight: 900, letterSpacing: 2 }}>Carga de Series eSIM</h2>
+          {generalAdmin ? (
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: "block", marginBottom: 6, color: "#ffe7ff", fontWeight: 700 }}>Agencia destino</label>
+              <input
+                list="agencias-disponibles"
+                value={agenciaCarga}
+                onChange={(e) => setAgenciaCarga(e.target.value)}
+                placeholder="Ejemplo: Pavas"
+                style={{ width: "100%", maxWidth: 360, padding: 10, borderRadius: 8, border: "1.5px solid #bd34fe", fontSize: 15, background: "#232323", color: "#fff", outline: "none" }}
+              />
+              <datalist id="agencias-disponibles">
+                {agenciasDisponibles.map((agencia) => (
+                  <option key={agencia} value={agencia} />
+                ))}
+              </datalist>
+              <div style={{ marginTop: 6, color: "#d4bcff", fontSize: 13 }}>Selecciona o escribe la agencia para agrupar esta carga.</div>
+            </div>
+          ) : (
+            <div style={{ marginBottom: 14, color: "#e7d5ff", fontWeight: 700 }}>
+              Agencia activa: {agenciaAdmin || "No asignada"}
+            </div>
+          )}
           <div style={{ maxHeight: '22vh', minHeight: 80, overflow: 'auto', marginBottom: '2vh' }}>
             <textarea
               value={input}
@@ -368,6 +837,7 @@ export default function AdminPanel({ user }) {
                     <thead>
                       <tr style={{ color: '#ff34fc', fontWeight: 700 }}>
                         <th style={{ padding: '6px 8px', textAlign: 'left' }}>Fecha</th>
+                        {generalAdmin && <th style={{ padding: '6px 8px', textAlign: 'left' }}>Agencia</th>}
                         <th style={{ padding: '6px 8px', textAlign: 'left' }}>Cantidad</th>
                         <th style={{ padding: '6px 8px', textAlign: 'left' }}>Usuario</th>
                         <th style={{ padding: '6px 8px', textAlign: 'left' }}>Acciones</th>
@@ -377,10 +847,11 @@ export default function AdminPanel({ user }) {
                       {historial.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE).map(lote => (
                         <tr key={lote.id} style={{ borderBottom: '1px solid #444' }}>
                           <td style={{ padding: '6px 8px' }}>{new Date(lote.fecha).toLocaleString()}</td>
+                          {generalAdmin && <td style={{ padding: '6px 8px' }}>{lote.agencia || '-'}</td>}
                           <td style={{ padding: '6px 8px' }}>{lote.cantidad}</td>
                           <td style={{ padding: '6px 8px' }}>{lote.usuario}</td>
                           <td style={{ padding: '6px 8px' }}>
-                            <button onClick={() => handleBorrarLote(lote.id)} style={{ background: '#ff34fc', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 12px', fontWeight: 700, cursor: 'pointer' }}>Borrar lote</button>
+                            <button onClick={() => handleBorrarLote(lote)} style={{ background: '#ff34fc', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 12px', fontWeight: 700, cursor: 'pointer' }}>Borrar lote</button>
                           </td>
                         </tr>
                       ))}
@@ -397,81 +868,156 @@ export default function AdminPanel({ user }) {
           </div>
         </div>
       )}
-      {view === "usuarios" && (
-        <div style={{ width: '100%', maxWidth: 900, margin: "0 auto", background: "#181818", borderRadius: 20, boxShadow: "0 0 32px 4px #ff34fccc", padding: "2.5vw 2vw", color: "#fff", boxSizing: 'border-box' }}>
-          <h2 style={{ color: "#ff34fc", textShadow: '0 2px 12px #ff34fccc, 0 0 2px #fff', fontWeight: 900, letterSpacing: 2 }}>
-            {isAgencyAdmin ? "Gestión de agentes de agencia" : "Usuarios del sistema"}
+      {view === "agentes" && (
+        <div style={{ width: '100%', maxWidth: 900, margin: "0 auto", background: "#181818", borderRadius: 20, boxShadow: "0 0 32px 4px #ffe066cc", padding: "2.5vw 2vw", color: "#fff", boxSizing: 'border-box' }}>
+          <h2 style={{ color: "#ffe066", textShadow: '0 2px 12px #ffe066cc, 0 0 2px #fff', fontWeight: 900, letterSpacing: 2 }}>
+            {generalAdmin ? "Gestión de usuarios por agencia" : "Gestión de agentes de agencia"}
           </h2>
-          {isAgencyAdmin && (
-            <div style={{ marginBottom: 16, color: "#ffe668", fontWeight: 700 }}>
-              Solo puedes crear y administrar usuarios de tu agencia ({agencyFromProfile || "sin agencia"}).
+          <div style={{ marginBottom: 10, color: "#fff3bf", fontWeight: 600 }}>
+            {generalAdmin
+              ? "Puedes crear agentes y administradores de agencia, asignando su agencia." 
+              : `Solo puedes crear agentes de tu agencia (${agenciaAdmin || "No asignada"}).`}
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <input
+              type="text"
+              placeholder="Buscar por nombre, correo, rol o agencia"
+              value={filtroUsuarios}
+              onChange={(e) => setFiltroUsuarios(e.target.value)}
+              style={{ width: "100%", maxWidth: 420, padding: 10, borderRadius: 8, border: "1.5px solid #ffe066", fontSize: 15, background: "#232323", color: "#fff", outline: "none" }}
+            />
+          </div>
+          <form onSubmit={handleCrearAgente} style={{ display: 'grid', gridTemplateColumns: generalAdmin ? '1fr 1fr 1fr 1fr 1fr auto' : '1fr 1fr 1fr auto', gap: 10, alignItems: 'center', marginBottom: 18 }}>
+            <input
+              type="text"
+              placeholder="Nombre completo"
+              value={nombreAgente}
+              onChange={(e) => setNombreAgente(e.target.value)}
+              style={{ width: '100%', padding: 10, borderRadius: 8, border: '1.5px solid #ffe066', fontSize: 15, background: '#232323', color: '#fff', outline: 'none' }}
+            />
+            <input
+              type="email"
+              placeholder="Correo"
+              value={emailAgente}
+              onChange={(e) => setEmailAgente(e.target.value)}
+              style={{ width: '100%', padding: 10, borderRadius: 8, border: '1.5px solid #ffe066', fontSize: 15, background: '#232323', color: '#fff', outline: 'none' }}
+            />
+            {generalAdmin && (
+              <select
+                value={rolNuevoUsuario}
+                onChange={(e) => setRolNuevoUsuario(e.target.value)}
+                style={{ width: '100%', padding: 10, borderRadius: 8, border: '1.5px solid #ffe066', fontSize: 15, background: '#232323', color: '#fff', outline: 'none' }}
+              >
+                <option value="agente">Agente</option>
+                <option value="admin_agencia">Admin de agencia</option>
+              </select>
+            )}
+            {generalAdmin && (
+              <input
+                list="agencias-usuarios"
+                type="text"
+                placeholder="Agencia"
+                value={agenciaNuevoUsuario}
+                onChange={(e) => setAgenciaNuevoUsuario(e.target.value)}
+                style={{ width: '100%', padding: 10, borderRadius: 8, border: '1.5px solid #ffe066', fontSize: 15, background: '#232323', color: '#fff', outline: 'none' }}
+              />
+            )}
+            <datalist id="agencias-usuarios">
+              {agenciasDisponibles.map((agencia) => (
+                <option key={agencia} value={agencia} />
+              ))}
+            </datalist>
+            <input
+              type="password"
+              placeholder="Contraseña temporal"
+              value={passwordAgente}
+              onChange={(e) => setPasswordAgente(e.target.value)}
+              style={{ width: '100%', padding: 10, borderRadius: 8, border: '1.5px solid #ffe066', fontSize: 15, background: '#232323', color: '#fff', outline: 'none' }}
+            />
+            <button type="submit" disabled={creandoAgente} style={{ background: '#ffe066', color: '#181818', border: 'none', borderRadius: 8, padding: '10px 16px', fontWeight: 900, cursor: creandoAgente ? 'not-allowed' : 'pointer', opacity: creandoAgente ? 0.6 : 1 }}>
+              {creandoAgente ? 'Creando...' : generalAdmin ? 'Crear usuario' : 'Crear agente'}
+            </button>
+          </form>
+
+          {mensajeAgente && <div style={{ color: '#ffe066', marginBottom: 12, fontWeight: 700 }}>{mensajeAgente}</div>}
+
+          {generalAdmin && usuariosFiltrados.length > 0 && (
+            <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => setVistaAgrupadaAgencias((prev) => !prev)}
+                style={{ background: "#ffe066", color: "#181818", border: "none", borderRadius: 8, padding: "8px 12px", fontWeight: 800, cursor: "pointer" }}
+              >
+                {vistaAgrupadaAgencias ? "Ver lista plana" : "Agrupar por agencia"}
+              </button>
+              {vistaAgrupadaAgencias && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => cambiarExpansionGlobal(true)}
+                    style={{ background: "#393939", color: "#fff", border: "1px solid #ffe06666", borderRadius: 8, padding: "8px 12px", fontWeight: 700, cursor: "pointer" }}
+                  >
+                    Expandir todo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => cambiarExpansionGlobal(false)}
+                    style={{ background: "#393939", color: "#fff", border: "1px solid #ffe06666", borderRadius: 8, padding: "8px 12px", fontWeight: 700, cursor: "pointer" }}
+                  >
+                    Contraer todo
+                  </button>
+                </>
+              )}
             </div>
           )}
-          <div style={{ marginBottom: 32 }}>
-            <form onSubmit={handleCrearUsuario} style={{ display: 'flex', flexDirection: 'row', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-              <input type="text" placeholder="Nombre" value={nuevoNombre} onChange={e => setNuevoNombre(e.target.value)} style={{ flex: 2, minWidth: 120, padding: 10, borderRadius: 8, border: '1.5px solid #ff34fc', fontSize: 15, background: '#232323', color: '#fff', boxShadow: '0 2px 8px #ff34fc33', outline: 'none' }} />
-              <input type="email" placeholder="Email" value={nuevoEmail} onChange={e => setNuevoEmail(e.target.value)} style={{ flex: 2, minWidth: 120, padding: 10, borderRadius: 8, border: '1.5px solid #ff34fc', fontSize: 15, background: '#232323', color: '#fff', boxShadow: '0 2px 8px #ff34fc33', outline: 'none' }} />
-              <input type="password" placeholder="Contrasena" value={nuevoPassword} onChange={e => setNuevoPassword(e.target.value)} style={{ flex: 2, minWidth: 120, padding: 10, borderRadius: 8, border: '1.5px solid #ff34fc', fontSize: 15, background: '#232323', color: '#fff', boxShadow: '0 2px 8px #ff34fc33', outline: 'none' }} />
-              <select value={nuevoRol} onChange={e => setNuevoRol(e.target.value)} style={{ flex: 1, minWidth: 100, padding: 10, borderRadius: 8, border: '1.5px solid #ff34fc', fontSize: 15, background: '#232323', color: '#fff', boxShadow: '0 2px 8px #ff34fc33', outline: 'none' }}>
-                <option value="ejecutivo">Agente</option>
-                <option value="admin_agencia">Admin de agencia</option>
-                {isGeneralAdmin && <option value="admin">Admin general</option>}
-              </select>
-              {isGeneralAdmin && (
-                <input
-                  type="text"
-                  placeholder="Agencia"
-                  value={nuevoAgencia}
-                  onChange={e => setNuevoAgencia(e.target.value)}
-                  style={{ flex: 1, minWidth: 120, padding: 10, borderRadius: 8, border: '1.5px solid #ff34fc', fontSize: 15, background: '#232323', color: '#fff', boxShadow: '0 2px 8px #ff34fc33', outline: 'none' }}
-                />
-              )}
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#fff', minWidth: 80 }}>
-                <input type="checkbox" checked={nuevoActivo} onChange={e => setNuevoActivo(e.target.checked)} /> Activo
-              </label>
-              <button type="submit" disabled={creandoUsuario} style={{ background: 'linear-gradient(90deg, #ff34fc 0%, #00fff7 100%)', color: '#181818', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 900, fontSize: 16, boxShadow: '0 2px 16px #ff34fccc', cursor: creandoUsuario ? 'not-allowed' : 'pointer', opacity: creandoUsuario ? 0.6 : 1, transition: 'background 0.2s', letterSpacing: 1, textShadow: '0 1px 8px #fff' }}>{creandoUsuario ? 'Creando...' : 'Crear Usuario'}</button>
-            </form>
-            {mensajeUsuario && <div style={{ color: '#00fff7', marginTop: 12, fontWeight: 700 }}>{mensajeUsuario}</div>}
-          </div>
-          <h3 style={{ color: '#ff34fc', marginBottom: 12 }}>Lista de usuarios</h3>
-          {mensajeUsuarios && <div style={{ color: '#00fff7', marginBottom: 12, fontWeight: 700 }}>{mensajeUsuarios}</div>}
-          {cargandoUsuarios ? (
-            <div style={{ color: '#fff', opacity: 0.7 }}>Cargando usuarios...</div>
+
+          <h3 style={{ color: '#ffe066', marginBottom: 10 }}>Usuarios registrados</h3>
+          {cargandoAgentes ? (
+            <div>Cargando usuarios...</div>
+          ) : usuariosFiltrados.length === 0 ? (
+            <div>No hay usuarios que coincidan con el filtro.</div>
           ) : (
-            <div style={{ maxHeight: '40vh', overflow: 'auto', background: '#232323', borderRadius: 12, padding: '1vw', border: '1.5px solid #ff34fc' }}>
-              {usuarios.length === 0 ? (
-                <div style={{ color: '#fff', opacity: 0.7 }}>No hay usuarios registrados.</div>
+            <>
+              <datalist id="agencias-edicion">
+                {agenciasDisponibles.map((agencia) => (
+                  <option key={agencia} value={agencia} />
+                ))}
+              </datalist>
+
+              {generalAdmin && vistaAgrupadaAgencias ? (
+                <div style={{ display: "grid", gap: 12 }}>
+                  {gruposUsuariosPorAgencia.map(([agencia, rows]) => {
+                    const estaExpandido = agenciasExpandidas[agencia] !== false;
+                    const activos = rows.filter((u) => u.activo !== false).length;
+                    const inactivos = rows.length - activos;
+
+                    return (
+                      <div key={agencia} style={{ border: "1.5px solid #ffe06655", borderRadius: 12, overflow: "hidden", background: "#1f1f1f" }}>
+                        <button
+                          type="button"
+                          onClick={() => alternarGrupoAgencia(agencia)}
+                          style={{ width: "100%", display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", padding: "12px 14px", background: "#ffe06611", color: "#fff", border: "none", cursor: "pointer", fontWeight: 800 }}
+                        >
+                          <span style={{ textAlign: "left" }}>{agencia}</span>
+                          <span style={{ color: "#ffe066", fontWeight: 700 }}>{rows.length} usuarios</span>
+                          <span style={{ color: "#9effcf", fontWeight: 700 }}>{activos} activos</span>
+                          <span style={{ color: "#ffcbcb", fontWeight: 700 }}>{inactivos} inactivos</span>
+                          <span style={{ color: "#fff3bf", fontWeight: 700 }}>{estaExpandido ? "Ocultar" : "Mostrar"}</span>
+                        </button>
+
+                        {estaExpandido && (
+                          <div style={{ padding: 10 }}>
+                            {renderUsuariosTable(rows)}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               ) : (
-                <table style={{ width: '100%', color: '#fff', fontSize: 15, borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr style={{ color: '#ff34fc', fontWeight: 700 }}>
-                      <th style={{ padding: '6px 8px', textAlign: 'left' }}>Nombre</th>
-                      <th style={{ padding: '6px 8px', textAlign: 'left' }}>Email</th>
-                      <th style={{ padding: '6px 8px', textAlign: 'left' }}>Agencia</th>
-                      <th style={{ padding: '6px 8px', textAlign: 'left' }}>Rol</th>
-                      <th style={{ padding: '6px 8px', textAlign: 'left' }}>Activo</th>
-                      <th style={{ padding: '6px 8px', textAlign: 'left' }}>Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {usuarios.map(u => (
-                      <tr key={u.uid} style={{ borderBottom: '1px solid #444' }}>
-                        <td style={{ padding: '6px 8px' }}>{u.nombre}</td>
-                        <td style={{ padding: '6px 8px' }}>{u.email}</td>
-                        <td style={{ padding: '6px 8px' }}>{u.agencia || '-'}</td>
-                        <td style={{ padding: '6px 8px' }}>{u.rol}</td>
-                        <td style={{ padding: '6px 8px' }}>{u.activo ? 'Sí' : 'No'}</td>
-                        <td style={{ padding: '6px 8px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          <button onClick={() => handleEditarUsuario(u)} style={{ background: '#00fff7', color: '#181818', border: 'none', borderRadius: 6, padding: '4px 12px', fontWeight: 700, cursor: 'pointer' }}>Editar</button>
-                          <button onClick={() => handleResetearContrasena(u)} style={{ background: '#ffe668', color: '#181818', border: 'none', borderRadius: 6, padding: '4px 12px', fontWeight: 700, cursor: 'pointer' }}>Reset pass</button>
-                          <button onClick={() => handleBorrarUsuario(u.uid, u.email)} style={{ background: '#ff34fc', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 12px', fontWeight: 700, cursor: 'pointer' }}>Borrar</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                renderUsuariosTable(usuariosFiltrados)
               )}
-            </div>
+            </>
           )}
         </div>
       )}
