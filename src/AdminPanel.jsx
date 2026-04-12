@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { getFirestore, collection, addDoc, onSnapshot, doc, writeBatch, getDocs, query, where, setDoc } from "firebase/firestore";
-import { createUserWithEmailAndPassword, getAuth as getSecondaryAuth } from "firebase/auth";
+import { getFirestore, collection, addDoc, onSnapshot, doc, writeBatch, getDocs, query, where, setDoc, deleteDoc } from "firebase/firestore";
+import { createUserWithEmailAndPassword, getAuth as getSecondaryAuth, sendPasswordResetEmail } from "firebase/auth";
 import { deleteApp, initializeApp } from "firebase/app";
 import { auth, firebaseConfig } from "./firebase";
 import { getUserAgency, isAgencyAdmin, isGeneralAdmin, isUserAdmin, normalizeAgency, sameAgency } from "./userProfile";
@@ -169,6 +169,69 @@ export default function AdminPanel({ user }) {
     setGuardandoUsuario(false);
   };
 
+  const puedeAdministrarAgente = (usuarioRow) => {
+    const rol = String(usuarioRow?.rol || "").trim().toLowerCase();
+    const mismaAgencia = sameAgency(usuarioRow?.agencia, agenciaAdmin);
+
+    if (generalAdmin) return true;
+    return agencyAdmin && rol === "agente" && mismaAgencia;
+  };
+
+  const handleEliminarUsuario = async (usuarioRow) => {
+    const esUsuarioActual = currentUserId && usuarioRow.id === currentUserId;
+    if (esUsuarioActual) {
+      setMensajeAgente("No puedes eliminar tu propio usuario.");
+      return;
+    }
+
+    if (!puedeAdministrarAgente(usuarioRow)) {
+      setMensajeAgente("No tienes permiso para eliminar este usuario.");
+      return;
+    }
+
+    const email = usuarioRow.email || usuarioRow.nombre || "este usuario";
+    if (!window.confirm(`¿Seguro que deseas eliminar a ${email}?`)) return;
+
+    try {
+      const db = getFirestore();
+      await deleteDoc(doc(db, "usuarios", usuarioRow.id));
+      setMensajeAgente(`Usuario ${email} eliminado correctamente.`);
+      fetchAgentes();
+      fetchAgencias();
+    } catch (err) {
+      setMensajeAgente("No se pudo eliminar el usuario.");
+    }
+  };
+
+  const handleResetPasswordUsuario = async (usuarioRow) => {
+    const esUsuarioActual = currentUserId && usuarioRow.id === currentUserId;
+    if (esUsuarioActual) {
+      setMensajeAgente("No puedes resetear la contraseña de tu propio usuario desde este panel.");
+      return;
+    }
+
+    if (!puedeAdministrarAgente(usuarioRow)) {
+      setMensajeAgente("No tienes permiso para resetear la contraseña de este usuario.");
+      return;
+    }
+
+    if (!usuarioRow?.email) {
+      setMensajeAgente("El usuario no tiene correo registrado.");
+      return;
+    }
+
+    try {
+      await sendPasswordResetEmail(auth, usuarioRow.email);
+      setMensajeAgente(`Se envió correo de restablecimiento a ${usuarioRow.email}.`);
+    } catch (err) {
+      if (err?.code === "auth/user-not-found") {
+        setMensajeAgente("No existe usuario de Auth para ese correo.");
+      } else {
+        setMensajeAgente(`No se pudo enviar el correo de restablecimiento. ${err?.message || ""}`);
+      }
+    }
+  };
+
   const fetchAgentes = async () => {
     setCargandoAgentes(true);
     setMensajeAgente("");
@@ -267,7 +330,10 @@ export default function AdminPanel({ user }) {
 
     try {
       const db = getFirestore();
-      const existente = await getDocs(query(collection(db, "usuarios"), where("email", "==", email)));
+      const existingQuery = generalAdmin
+        ? query(collection(db, "usuarios"), where("email", "==", email))
+        : query(collection(db, "usuarios"), where("email", "==", email), where("agencia", "==", agenciaAsignada));
+      const existente = await getDocs(existingQuery);
       if (!existente.empty) {
         setMensajeAgente("Ese correo ya está registrado en el sistema.");
         setCreandoAgente(false);
@@ -462,7 +528,7 @@ export default function AdminPanel({ user }) {
   const alternarGrupoAgencia = (agencia) => {
     setAgenciasExpandidas((prev) => ({
       ...prev,
-      [agencia]: prev[agencia] === false ? true : false,
+      [agencia]: prev[agencia] === false,
     }));
   };
 
@@ -480,6 +546,8 @@ export default function AdminPanel({ user }) {
     const estaEditando = editandoUsuarioId === a.id;
     const esUsuarioActual = currentUserId && a.id === currentUserId;
     const puedeEditarFila = generalAdmin ? !esUsuarioActual : true;
+    const puedeEliminarFila = !esUsuarioActual && puedeAdministrarAgente(a);
+    const puedeResetearFila = !!a.email && !esUsuarioActual && puedeAdministrarAgente(a);
 
     return (
       <tr key={a.id}>
@@ -565,13 +633,33 @@ export default function AdminPanel({ user }) {
               </button>
             </div>
           ) : puedeEditarFila ? (
-            <button
-              type="button"
-              onClick={() => iniciarEdicionUsuario(a)}
-              style={{ background: "#ffe066", color: "#181818", border: "none", borderRadius: 6, padding: "4px 10px", fontWeight: 700, cursor: "pointer" }}
-            >
-              Editar
-            </button>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => iniciarEdicionUsuario(a)}
+                style={{ background: "#ffe066", color: "#181818", border: "none", borderRadius: 6, padding: "4px 10px", fontWeight: 700, cursor: "pointer" }}
+              >
+                Editar
+              </button>
+              {puedeResetearFila && (
+                <button
+                  type="button"
+                  onClick={() => handleResetPasswordUsuario(a)}
+                  style={{ background: "#00d1b2", color: "#04151a", border: "none", borderRadius: 6, padding: "4px 10px", fontWeight: 700, cursor: "pointer" }}
+                >
+                  Reset pass
+                </button>
+              )}
+              {puedeEliminarFila && (
+                <button
+                  type="button"
+                  onClick={() => handleEliminarUsuario(a)}
+                  style={{ background: "#ff5f56", color: "#fff", border: "none", borderRadius: 6, padding: "4px 10px", fontWeight: 700, cursor: "pointer" }}
+                >
+                  Eliminar
+                </button>
+              )}
+            </div>
           ) : (
             <span style={{ color: "#ffd58c", fontWeight: 700 }}>Tu usuario</span>
           )}

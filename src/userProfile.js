@@ -1,6 +1,6 @@
-import { getFirestore, collection, query, where, getDocs } from "firebase/firestore";
+import { getFirestore, collection, query, where, getDocs, doc, getDoc } from "firebase/firestore";
 
-const ADMIN_EMAILS = ["rmadrigalj@ice.go.cr"];
+const ADMIN_EMAILS = ["rmadrigalj@ice.go.cr", "caoban@ice.go.cr"];
 
 function normalizeText(value) {
   return String(value || "").trim();
@@ -66,11 +66,32 @@ export function isUserAdmin(user) {
   return isGeneralAdmin(user) || isAgencyAdmin(user);
 }
 
-export async function getUserProfile(email) {
+export async function getUserProfile(userOrEmail) {
   const db = getFirestore();
+
+  const uid = typeof userOrEmail === "string" ? "" : normalizeText(userOrEmail?.uid);
+  const emailInput = typeof userOrEmail === "string"
+    ? userOrEmail
+    : (userOrEmail?.email || userOrEmail?.user?.email || "");
+  const email = normalizeTextKey(emailInput);
+
+  if (uid) {
+    const byUid = await getDoc(doc(db, "usuarios", uid));
+    if (byUid.exists()) {
+      return { id: byUid.id, ...byUid.data() };
+    }
+  }
+
+  if (!email) return null;
+
   const q = query(collection(db, "usuarios"), where("email", "==", email));
   const snapshot = await getDocs(q);
   if (snapshot.empty) return null;
-  // Devuelve el primer usuario encontrado
-  return { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
+
+  const byUidMatch = uid
+    ? snapshot.docs.find((docSnap) => docSnap.id === uid)
+    : null;
+  const selected = byUidMatch || snapshot.docs[0];
+
+  return { id: selected.id, ...selected.data() };
 }

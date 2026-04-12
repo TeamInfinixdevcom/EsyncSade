@@ -34,7 +34,10 @@ function App() {
       setLoading(true);
 
       if (firebaseUser) {
-        const profile = await getUserProfile(firebaseUser.email);
+        const profile = await getUserProfile({
+          uid: firebaseUser.uid,
+          email: firebaseUser.email,
+        });
         setUser(profile);
       } else {
         setUser(null);

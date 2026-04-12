@@ -53,7 +53,7 @@ export default function TeamRequestsTable({ user }) {
     currentPage * pageSize
   );
 
-  const totalColumns = canSeeAll ? 6 : 5;
+  const totalColumns = canSeeAll ? 8 : 7;
 
   return (
     <div style={{ maxWidth: 980, margin: "2rem auto" }}>
@@ -70,6 +70,8 @@ export default function TeamRequestsTable({ user }) {
                   {canSeeAll && <th style={{ border: "1.5px solid #00fff7", padding: "8px 6px" }}>Agencia</th>}
                   <th style={{ border: "1.5px solid #00fff7", padding: "8px 6px" }}>Tipo</th>
                   <th style={{ border: "1.5px solid #00fff7", padding: "8px 6px" }}>Pedido</th>
+                  <th style={{ border: "1.5px solid #00fff7", padding: "8px 6px" }}>Numero cliente</th>
+                  <th style={{ border: "1.5px solid #00fff7", padding: "8px 6px" }}>Cedula</th>
                   <th style={{ border: "1.5px solid #00fff7", padding: "8px 6px" }}>Usuario</th>
                   <th style={{ border: "1.5px solid #00fff7", padding: "8px 6px" }}>Fecha solicitud</th>
                 </tr>
@@ -88,6 +90,8 @@ export default function TeamRequestsTable({ user }) {
                       {canSeeAll && <td style={{ border: "1px solid #00fff7", padding: "6px 4px" }}>{s.agencia || "-"}</td>}
                       <td style={{ border: "1px solid #00fff7", padding: "6px 4px" }}>{getTipoGestion(s)}</td>
                       <td style={{ border: "1px solid #00fff7", padding: "6px 4px" }}>{s.pedido || (s.pedidoPendiente ? "Pendiente por sistema" : "-")}</td>
+                      <td style={{ border: "1px solid #00fff7", padding: "6px 4px" }}>{s.numero || s.numeroCliente || "-"}</td>
+                      <td style={{ border: "1px solid #00fff7", padding: "6px 4px" }}>{s.cedula || s.identificacion || "-"}</td>
                       <td style={{ border: "1px solid #00fff7", padding: "6px 4px" }}>{s.usuario}</td>
                       <td style={{ border: "1px solid #00fff7", padding: "6px 4px" }}>{s.fecha ? new Date(s.fecha).toLocaleString() : "-"}</td>
                     </tr>

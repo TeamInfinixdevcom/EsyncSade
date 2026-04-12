@@ -17,25 +17,36 @@ service cloud.firestore {
       return get(userProfilePath()).data;
     }
 
+    function isTrueFlag(value) {
+      return value == true || value == "true";
+    }
+
     function myAgency() {
       return profile().agencia;
     }
 
     function isGeneralAdmin() {
-      return hasProfile() && (
-        profile().adminGeneral == true ||
-        profile().rol == "admin_general" ||
-        profile().rol == "super_admin" ||
-        profile().rol == "administrador_general" ||
-        request.auth.token.email == "rmadrigalj@ice.go.cr"
-      );
+      return (signedIn() && request.auth.token.email == "rmadrigalj@ice.go.cr") ||
+        (
+          hasProfile() && (
+            isTrueFlag(profile().adminGeneral) ||
+            profile().rol == "admin_general" ||
+            profile().rol == "super_admin" ||
+            profile().rol == "administrador_general"
+          )
+        );
     }
 
     function isAgencyAdmin() {
-      return hasProfile() && (
-        profile().adminAgencia == true ||
+      return hasProfile() && !isGeneralAdmin() && (
+        isTrueFlag(profile().adminAgencia) ||
         profile().rol == "admin_agencia" ||
-        profile().rol == "administrador_agencia"
+        profile().rol == "administrador_agencia" ||
+        (
+          (profile().rol == "admin" || profile().rol == "administrador") &&
+          profile().agencia is string &&
+          profile().agencia != ""
+        )
       );
     }
 
@@ -54,6 +65,17 @@ service cloud.firestore {
       return signedIn() && request.auth.token.email == email;
     }
 
+    function isMainGeneralAdminEmail() {
+      return signedIn() && (
+        request.auth.token.email == "rmadrigalj@ice.go.cr" ||
+        request.auth.token.email == "caoban@ice.go.cr"
+      );
+    }
+
+    function canAssignAdminGeneralRole(role) {
+      return role != "admin_general" || isMainGeneralAdminEmail();
+    }
+
     function isAllowedRole(role) {
       return role in ["agente", "admin_agencia", "admin_general"];
     }
@@ -67,7 +89,10 @@ service cloud.firestore {
       allow create: if request.resource.data.email is string &&
         request.resource.data.rol is string &&
         isAllowedRole(request.resource.data.rol) && (
-          isGeneralAdmin() ||
+          (
+            isGeneralAdmin() &&
+            canAssignAdminGeneralRole(request.resource.data.rol)
+          ) ||
           (
             isAgencyAdmin() &&
             request.resource.data.rol == "agente" &&
@@ -77,7 +102,11 @@ service cloud.firestore {
           )
         );
 
-      allow update: if isGeneralAdmin() ||
+      allow update: if (
+          isGeneralAdmin() &&
+          canAssignAdminGeneralRole(resource.data.rol) &&
+          canAssignAdminGeneralRole(request.resource.data.rol)
+        ) ||
         (
           isAgencyAdmin() &&
           resource.data.agencia == myAgency() &&
@@ -92,7 +121,15 @@ service cloud.firestore {
           request.resource.data.agencia == resource.data.agencia
         );
 
-      allow delete: if isGeneralAdmin();
+      allow delete: if isGeneralAdmin() ||
+        (
+          isAgencyAdmin() &&
+          userId != request.auth.uid &&
+          resource.data.agencia == myAgency() &&
+          resource.data.rol == "agente" &&
+          resource.data.adminGeneral != true &&
+          resource.data.adminAgencia != true
+        );
     }
 
     match /esims/{esimId} {
