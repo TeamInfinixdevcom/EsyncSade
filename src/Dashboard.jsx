@@ -1,23 +1,54 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { db } from "./firebase";
 import EsimPieChart from "./EsimPieChart";
 import { getUserAgency, isGeneralAdmin, sameAgency } from "./userProfile";
 
+function normalizeStatus(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isAvailableStatus(value) {
+  return normalizeStatus(value) === "disponible";
+}
+
 export default function Dashboard({ user }) {
   const [disponibles, setDisponibles] = useState(0);
   const [usadas, setUsadas] = useState(0);
   const [total, setTotal] = useState(0);
+  const [estadoPorAgencia, setEstadoPorAgencia] = useState([]);
+  const [agenciaGraficaSeleccionada, setAgenciaGraficaSeleccionada] = useState("");
   const [devoluciones, setDevoluciones] = useState(0);
   const [solicitudesPorEjecutivo, setSolicitudesPorEjecutivo] = useState({});
+  const [error, setError] = useState("");
   const agenciaUsuario = getUserAgency(user);
   const canSeeAll = isGeneralAdmin(user);
 
   useEffect(() => {
+    if (!canSeeAll) {
+      setAgenciaGraficaSeleccionada("");
+      return;
+    }
+
+    if (estadoPorAgencia.length === 0) {
+      setAgenciaGraficaSeleccionada("");
+      return;
+    }
+
+    const existeSeleccion = estadoPorAgencia.some((row) => row.agencia === agenciaGraficaSeleccionada);
+    if (!existeSeleccion) {
+      setAgenciaGraficaSeleccionada(estadoPorAgencia[0].agencia);
+    }
+  }, [canSeeAll, estadoPorAgencia, agenciaGraficaSeleccionada]);
+
+  useEffect(() => {
+    setError("");
+
     if (!canSeeAll && !agenciaUsuario) {
       setDisponibles(0);
       setUsadas(0);
       setTotal(0);
+      setEstadoPorAgencia([]);
       return;
     }
 
@@ -25,19 +56,73 @@ export default function Dashboard({ user }) {
       ? collection(db, "esims")
       : query(collection(db, "esims"), where("agencia", "==", agenciaUsuario));
 
-    const unsub = onSnapshot(source, (snapshot) => {
-      let disp = 0, used = 0;
-      snapshot.forEach(doc => {
-        const data = doc.data();
-        if (data.estado === "disponible") disp++;
-        else used++;
-      });
-      setDisponibles(disp);
-      setUsadas(used);
-      setTotal(disp + used);
-    });
+    const unsub = onSnapshot(
+      source,
+      (snapshot) => {
+        let disp = 0, used = 0;
+        const byAgency = new Map();
+
+        snapshot.forEach(doc => {
+          const data = doc.data();
+          const disponible = isAvailableStatus(data.estado);
+
+          if (disponible) disp++;
+          else used++;
+
+          const agencia = String(data.agencia || "").trim() || "Sin agencia";
+          const current = byAgency.get(agencia) || { disponibles: 0, usadas: 0, total: 0 };
+          if (disponible) {
+            current.disponibles += 1;
+          } else {
+            current.usadas += 1;
+          }
+          current.total += 1;
+          byAgency.set(agencia, current);
+        });
+
+        const agrupado = Array.from(byAgency.entries())
+          .map(([agencia, values]) => ({ agencia, ...values }))
+          .sort((a, b) => a.agencia.localeCompare(b.agencia));
+
+        setDisponibles(disp);
+        setUsadas(used);
+        setTotal(disp + used);
+        setEstadoPorAgencia(agrupado);
+      },
+      () => {
+        setError("No se pudieron cargar las metricas de eSIMs.");
+      }
+    );
     return () => unsub();
   }, [canSeeAll, agenciaUsuario]);
+
+  const metricasVisibles = useMemo(() => {
+    if (canSeeAll) {
+      if (agenciaGraficaSeleccionada) {
+        const seleccion = estadoPorAgencia.find((row) => row.agencia === agenciaGraficaSeleccionada);
+        if (seleccion) {
+          return {
+            disponibles: seleccion.disponibles,
+            usadas: seleccion.usadas,
+            total: seleccion.total,
+          };
+        }
+      }
+
+      return { disponibles, usadas, total };
+    }
+
+    const metricaAgencia = estadoPorAgencia.find((row) => sameAgency(row.agencia, agenciaUsuario));
+    if (metricaAgencia) {
+      return {
+        disponibles: metricaAgencia.disponibles,
+        usadas: metricaAgencia.usadas,
+        total: metricaAgencia.total,
+      };
+    }
+
+    return { disponibles, usadas, total };
+  }, [canSeeAll, agenciaGraficaSeleccionada, estadoPorAgencia, disponibles, usadas, total, agenciaUsuario]);
 
   // Consultar y agrupar solicitudes por ejecutivo (email)
   useEffect(() => {
@@ -50,17 +135,23 @@ export default function Dashboard({ user }) {
       ? collection(db, "solicitudes")
       : query(collection(db, "solicitudes"), where("agencia", "==", agenciaUsuario));
 
-    const unsub = onSnapshot(source, (snapshot) => {
-      const counts = {};
-      snapshot.forEach(doc => {
-        const data = doc.data();
-        const email = data.usuario;
-        if (email) {
-          counts[email] = (counts[email] || 0) + 1;
-        }
-      });
-      setSolicitudesPorEjecutivo(counts);
-    });
+    const unsub = onSnapshot(
+      source,
+      (snapshot) => {
+        const counts = {};
+        snapshot.forEach(doc => {
+          const data = doc.data();
+          const email = data.usuario;
+          if (email) {
+            counts[email] = (counts[email] || 0) + 1;
+          }
+        });
+        setSolicitudesPorEjecutivo(counts);
+      },
+      () => {
+        setError("No se pudieron cargar las solicitudes del equipo.");
+      }
+    );
     return () => unsub();
   }, [canSeeAll, agenciaUsuario]);
 
@@ -74,29 +165,48 @@ export default function Dashboard({ user }) {
       ? collection(db, "devoluciones")
       : query(collection(db, "devoluciones"), where("agencia", "==", agenciaUsuario));
 
-    const unsub = onSnapshot(source, (snapshot) => {
-      let totalDevoluciones = 0;
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        if (canSeeAll || sameAgency(data.agencia, agenciaUsuario)) {
-          totalDevoluciones += 1;
-        }
-      });
-      setDevoluciones(totalDevoluciones);
-    });
+    const unsub = onSnapshot(
+      source,
+      (snapshot) => {
+        let totalDevoluciones = 0;
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          if (canSeeAll || sameAgency(data.agencia, agenciaUsuario)) {
+            totalDevoluciones += 1;
+          }
+        });
+        setDevoluciones(totalDevoluciones);
+      },
+      () => {
+        setError("No se pudieron cargar las devoluciones.");
+      }
+    );
     return () => unsub();
   }, [canSeeAll, agenciaUsuario]);
 
-  const tasaUso = total === 0 ? 0 : Math.round((usadas / total) * 100);
+  const tasaUso = metricasVisibles.total === 0
+    ? 0
+    : Math.round((metricasVisibles.usadas / metricasVisibles.total) * 100);
+  const agenciaActiva = canSeeAll
+    ? estadoPorAgencia.find((row) => row.agencia === agenciaGraficaSeleccionada) || null
+    : null;
 
   return (
     <div style={{ width: "100%", maxWidth: 1240, margin: "0 auto" }}>
       <h2 style={{ marginBottom: 24, color: "#00fff7", textShadow: "0 2px 12px #00fff7cc, 0 0 2px #fff", fontWeight: 900, letterSpacing: 2 }}>
-        EsynSadeCloud Dashboard
+        Panel de control de EsyncSadeCloud
       </h2>
+      {error && (
+        <p style={{ marginTop: -8, marginBottom: 16, color: "#ffd1d1", fontWeight: 700 }}>{error}</p>
+      )}
       {!canSeeAll && agenciaUsuario && (
         <p style={{ marginTop: -8, marginBottom: 16, color: "#c6f9f0", fontWeight: 700 }}>
           Vista filtrada por agencia: {agenciaUsuario}
+        </p>
+      )}
+      {canSeeAll && agenciaActiva && (
+        <p style={{ marginTop: -8, marginBottom: 16, color: "#c6f9f0", fontWeight: 700 }}>
+          Mostrando metricas de agencia: {agenciaActiva.agencia}
         </p>
       )}
 
@@ -110,15 +220,15 @@ export default function Dashboard({ user }) {
       >
         <div style={{ background: "#181818", borderRadius: 16, padding: 18, boxShadow: "0 0 16px 2px #00fff7cc" }}>
           <div style={{ fontSize: 14, color: "#00fff7", textShadow: "0 1px 8px #00fff7cc" }}>Disponibles</div>
-          <div style={{ fontSize: 30, fontWeight: "bold", color: "#00fff7", textShadow: "0 1px 8px #00fff7cc" }}>{disponibles}</div>
+          <div style={{ fontSize: 30, fontWeight: "bold", color: "#00fff7", textShadow: "0 1px 8px #00fff7cc" }}>{metricasVisibles.disponibles}</div>
         </div>
         <div style={{ background: "#181818", borderRadius: 16, padding: 18, boxShadow: "0 0 16px 2px #ff3c2fcc" }}>
           <div style={{ fontSize: 14, color: "#ff3c2f", textShadow: "0 1px 8px #ff3c2fcc" }}>Usadas</div>
-          <div style={{ fontSize: 30, fontWeight: "bold", color: "#ff3c2f", textShadow: "0 1px 8px #ff3c2fcc" }}>{usadas}</div>
+          <div style={{ fontSize: 30, fontWeight: "bold", color: "#ff3c2f", textShadow: "0 1px 8px #ff3c2fcc" }}>{metricasVisibles.usadas}</div>
         </div>
         <div style={{ background: "#181818", borderRadius: 16, padding: 18, boxShadow: "0 0 16px 2px #00fff7cc" }}>
           <div style={{ fontSize: 14, color: "#00fff7", textShadow: "0 1px 8px #00fff7cc" }}>Total</div>
-          <div style={{ fontSize: 30, fontWeight: "bold", color: "#00fff7", textShadow: "0 1px 8px #00fff7cc" }}>{total}</div>
+          <div style={{ fontSize: 30, fontWeight: "bold", color: "#00fff7", textShadow: "0 1px 8px #00fff7cc" }}>{metricasVisibles.total}</div>
         </div>
         <div style={{ background: "#181818", borderRadius: 16, padding: 18, boxShadow: "0 0 16px 2px #ffe066cc" }}>
           <div style={{ fontSize: 14, color: "#ffe066", textShadow: "0 1px 8px #ffe066cc" }}>Tasa de Uso</div>
@@ -139,8 +249,50 @@ export default function Dashboard({ user }) {
         }}
       >
         <div style={{ background: "#181818", borderRadius: 16, padding: 18, boxShadow: "0 0 16px 2px #00fff7cc", minHeight: 320 }}>
-          <h3 style={{ fontSize: 18, marginBottom: 16, color: "#00fff7", textShadow: "0 1px 8px #00fff7cc" }}>Distribucion de estados</h3>
-          <EsimPieChart disponibles={disponibles} usadas={usadas} />
+          <h3 style={{ fontSize: 18, marginBottom: 16, color: "#00fff7", textShadow: "0 1px 8px #00fff7cc" }}>
+            {canSeeAll ? "Distribucion de estados por agencia" : "Distribucion de estados"}
+          </h3>
+
+          {canSeeAll ? (
+            estadoPorAgencia.length === 0 ? (
+              <div style={{ width: "100%", height: 220, display: "flex", alignItems: "center", justifyContent: "center", color: "#00fff7" }}>
+                Sin datos para graficar
+              </div>
+            ) : (
+              <div>
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ display: "block", marginBottom: 6, color: "#c6f9f0", fontWeight: 700 }}>
+                    Selecciona una agencia
+                  </label>
+                  <select
+                    value={agenciaGraficaSeleccionada}
+                    onChange={(e) => setAgenciaGraficaSeleccionada(e.target.value)}
+                    style={{ width: "100%", maxWidth: 360, padding: 10, borderRadius: 8, border: "1.5px solid #00fff7", background: "#232323", color: "#fff", outline: "none" }}
+                  >
+                    {estadoPorAgencia.map((row) => (
+                      <option key={row.agencia} value={row.agencia}>{row.agencia}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {agenciaActiva ? (
+                  <div style={{ border: "1px solid #00fff744", borderRadius: 12, padding: 10, background: "#141414" }}>
+                    <div style={{ fontWeight: 800, color: "#dff" }}>{agenciaActiva.agencia}</div>
+                    <div style={{ fontSize: 13, color: "#9cefee", marginTop: 2 }}>
+                      Disponibles: {agenciaActiva.disponibles} | Usadas: {agenciaActiva.usadas} | Total: {agenciaActiva.total}
+                    </div>
+                    <EsimPieChart disponibles={agenciaActiva.disponibles} usadas={agenciaActiva.usadas} />
+                  </div>
+                ) : (
+                  <div style={{ width: "100%", height: 180, display: "flex", alignItems: "center", justifyContent: "center", color: "#00fff7" }}>
+                    Selecciona una agencia para ver la dona.
+                  </div>
+                )}
+              </div>
+            )
+          ) : (
+            <EsimPieChart disponibles={metricasVisibles.disponibles} usadas={metricasVisibles.usadas} />
+          )}
         </div>
 
         <div style={{ background: "#181818", borderRadius: 16, padding: 18, boxShadow: "0 0 16px 2px #bd34fecc", minHeight: 320 }}>

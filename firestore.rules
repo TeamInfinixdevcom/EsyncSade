@@ -26,7 +26,10 @@ service cloud.firestore {
     }
 
     function isGeneralAdmin() {
-      return (signedIn() && request.auth.token.email == "rmadrigalj@ice.go.cr") ||
+      return (signedIn() && (
+          request.auth.token.email == "rmadrigalj@ice.go.cr" ||
+          request.auth.token.email == "caoban@ice.go.cr"
+        )) ||
         (
           hasProfile() && (
             isTrueFlag(profile().adminGeneral) ||
@@ -133,33 +136,34 @@ service cloud.firestore {
     }
 
     match /esims/{esimId} {
-      allow read: if resource.data.agencia is string && isAgencyMember(resource.data.agencia);
+      allow read: if isGeneralAdmin() ||
+        (resource.data.agencia is string && isAgencyMember(resource.data.agencia));
 
       allow create: if request.resource.data.agencia is string && (
         isGeneralAdmin() || isAgencyAdminOf(request.resource.data.agencia)
       );
 
-      allow update: if resource.data.agencia is string &&
-        isAgencyMember(resource.data.agencia) &&
-        request.resource.data.agencia == resource.data.agencia;
+      allow update: if isGeneralAdmin() ||
+        (
+          resource.data.agencia is string &&
+          isAgencyMember(resource.data.agencia) &&
+          request.resource.data.agencia == resource.data.agencia
+        );
 
-      allow delete: if resource.data.agencia is string && (
-        isGeneralAdmin() || isAgencyAdminOf(resource.data.agencia)
-      );
+      allow delete: if isGeneralAdmin() ||
+        (resource.data.agencia is string && isAgencyAdminOf(resource.data.agencia));
     }
 
     match /lotes/{loteId} {
-      allow read: if resource.data.agencia is string && (
-        isGeneralAdmin() || isAgencyAdminOf(resource.data.agencia)
-      );
+      allow read: if isGeneralAdmin() ||
+        (resource.data.agencia is string && isAgencyAdminOf(resource.data.agencia));
 
       allow create: if request.resource.data.agencia is string && (
         isGeneralAdmin() || isAgencyAdminOf(request.resource.data.agencia)
       );
 
-      allow update, delete: if resource.data.agencia is string && (
-        isGeneralAdmin() || isAgencyAdminOf(resource.data.agencia)
-      );
+      allow update, delete: if isGeneralAdmin() ||
+        (resource.data.agencia is string && isAgencyAdminOf(resource.data.agencia));
     }
 
     match /solicitudes/{solicitudId} {

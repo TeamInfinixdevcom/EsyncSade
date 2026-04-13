@@ -39,7 +39,7 @@ export default function Navbar({ onLogout, user, onSelect }) {
       <div style={styles.userInfo}>
         <img src="/vite.svg" alt="Logo" style={styles.logo} />
         <div>
-          <div style={styles.appName}>EsynSadeCloud</div>
+          <div style={styles.appName}>EsyncSadeCloud</div>
           <div style={styles.userName}>{user?.name || "Usuario"}</div>
           <div style={styles.userEmail}>{user?.email || ""}</div>
           {user?.agencia && <div style={styles.userAgency}>Agencia: {user.agencia}</div>}

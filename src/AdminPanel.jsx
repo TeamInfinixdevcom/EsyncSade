@@ -62,6 +62,11 @@ export default function AdminPanel({ user }) {
     return rol || "Ejecutivo";
   };
 
+  const getAgencyDisplayLabel = (usuarioRow) => {
+    if (isGeneralAdmin(usuarioRow)) return "Administrador General";
+    return normalizeAgency(usuarioRow?.agencia) || "Sin agencia";
+  };
+
   const usuariosFiltrados = useMemo(() => {
     const filtro = filtroUsuarios.trim().toLowerCase();
     if (!filtro) return agentes;
@@ -76,7 +81,7 @@ export default function AdminPanel({ user }) {
     const grouped = new Map();
 
     usuariosFiltrados.forEach((usuarioRow) => {
-      const agenciaKey = normalizeAgency(usuarioRow.agencia) || "Sin agencia";
+      const agenciaKey = getAgencyDisplayLabel(usuarioRow);
       if (!grouped.has(agenciaKey)) {
         grouped.set(agenciaKey, []);
       }
@@ -84,8 +89,10 @@ export default function AdminPanel({ user }) {
     });
 
     return Array.from(grouped.entries()).sort((a, b) => {
-      if (a[0] === "Sin agencia") return -1;
-      if (b[0] === "Sin agencia") return 1;
+      if (a[0] === "Administrador General") return -1;
+      if (b[0] === "Administrador General") return 1;
+      if (a[0] === "Sin agencia") return 1;
+      if (b[0] === "Sin agencia") return -1;
       return a[0].localeCompare(b[0]);
     });
   }, [usuariosFiltrados]);
@@ -548,6 +555,8 @@ export default function AdminPanel({ user }) {
     const puedeEditarFila = generalAdmin ? !esUsuarioActual : true;
     const puedeEliminarFila = !esUsuarioActual && puedeAdministrarAgente(a);
     const puedeResetearFila = !!a.email && !esUsuarioActual && puedeAdministrarAgente(a);
+    const esAdminGeneralFila = isGeneralAdmin(a);
+    const agenciaMostrar = getAgencyDisplayLabel(a);
 
     return (
       <tr key={a.id}>
@@ -577,8 +586,8 @@ export default function AdminPanel({ user }) {
               />
             )
           ) : (
-            <span style={{ color: a.agencia ? "#fff" : "#ffd2a6", fontWeight: a.agencia ? 500 : 800 }}>
-              {a.agencia || "Sin agencia"}
+            <span style={{ color: esAdminGeneralFila || a.agencia ? "#fff" : "#ffd2a6", fontWeight: esAdminGeneralFila ? 800 : (a.agencia ? 500 : 800) }}>
+              {agenciaMostrar}
             </span>
           )}
         </td>

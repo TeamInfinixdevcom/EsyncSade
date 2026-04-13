@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 
-import { collection, query, where, getDocs, doc, runTransaction } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, runTransaction, onSnapshot } from "firebase/firestore";
 import { db, auth } from "./firebase";
 import { getUserAgency } from "./userProfile";
 import "./forms.css";
@@ -10,14 +10,52 @@ const REQUEST_MODES = {
   komercial: "komercial",
 };
 
+const LOW_STOCK_THRESHOLD = 15;
+
 export default function EsimRequestForm({ user }) {
   const [requestMode, setRequestMode] = useState(REQUEST_MODES.normal);
   const [pedido, setPedido] = useState("");
   const [numero, setNumero] = useState("");
   const [cedula, setCedula] = useState("");
   const [msg, setMsg] = useState("");
+  const [esimsDisponibles, setEsimsDisponibles] = useState(null);
+  const [cargandoDisponibles, setCargandoDisponibles] = useState(false);
+  const [errorDisponibles, setErrorDisponibles] = useState("");
 
   const [serieAsignada, setSerieAsignada] = useState("");
+  const agenciaUsuario = getUserAgency(user);
+
+  useEffect(() => {
+    if (!agenciaUsuario) {
+      setEsimsDisponibles(null);
+      setErrorDisponibles("");
+      setCargandoDisponibles(false);
+      return;
+    }
+
+    setCargandoDisponibles(true);
+    setErrorDisponibles("");
+
+    const qDisponibles = query(
+      collection(db, "esims"),
+      where("estado", "==", "disponible"),
+      where("agencia", "==", agenciaUsuario)
+    );
+
+    const unsubscribe = onSnapshot(
+      qDisponibles,
+      (snap) => {
+        setEsimsDisponibles(snap.size);
+        setCargandoDisponibles(false);
+      },
+      () => {
+        setErrorDisponibles("No se pudo cargar el inventario de eSIMs para tu agencia.");
+        setCargandoDisponibles(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [agenciaUsuario]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -27,7 +65,7 @@ export default function EsimRequestForm({ user }) {
     const numeroLimpio = numero.trim();
     const cedulaLimpia = cedula.trim();
     const isCambioKomercial = requestMode === REQUEST_MODES.komercial;
-    const agencia = getUserAgency(user);
+    const agencia = agenciaUsuario;
 
     if (!agencia) {
       setMsg("Error: Tu usuario no tiene agencia asignada. Contacta al administrador general.");
@@ -109,6 +147,10 @@ export default function EsimRequestForm({ user }) {
 
   const msgIsError = msg.toLowerCase().startsWith("error");
   const isCambioKomercial = requestMode === REQUEST_MODES.komercial;
+  const isLowStock =
+    !cargandoDisponibles &&
+    typeof esimsDisponibles === "number" &&
+    esimsDisponibles <= LOW_STOCK_THRESHOLD;
 
   return (
     <div className="form-screen">
@@ -118,6 +160,27 @@ export default function EsimRequestForm({ user }) {
         <p className="form-subtitle">
           Selecciona el tipo de gestion y el sistema asignara la siguiente serie disponible.
         </p>
+
+        {agenciaUsuario && (
+          <div className={`form-availability ${isLowStock ? "is-low-stock" : ""}`}>
+            <span className="form-availability__label">Quedan disponibles en {agenciaUsuario}</span>
+            <span className="form-availability__value">
+              {cargandoDisponibles ? "Cargando..." : esimsDisponibles ?? 0}
+            </span>
+          </div>
+        )}
+
+        {agenciaUsuario && isLowStock && (
+          <div className="form-stock-alert">
+            Alerta: quedan {esimsDisponibles} eSIMs disponibles en {agenciaUsuario}.
+          </div>
+        )}
+
+        {errorDisponibles && (
+          <div className="form-feedback is-error">
+            {errorDisponibles}
+          </div>
+        )}
 
         <div className="form-tabs">
           <button
