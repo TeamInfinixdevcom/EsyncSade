@@ -45,3 +45,44 @@ textarea,
 select {
   font: inherit;
 }
+
+.no-print {
+  display: initial;
+}
+
+@media print {
+  body {
+    background: #ffffff !important;
+  }
+
+  #root {
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .barcode-print-area {
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #111111 !important;
+  }
+
+  .barcode-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+
+  .barcode-ticket {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    border: 1px solid #1a1a1a !important;
+  }
+}

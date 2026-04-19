@@ -465,6 +465,7 @@ export default function AdminPanel({ user }) {
       for (const serie of series) {
         await addDoc(collection(db, "esims"), {
           serie,
+          codigoBarras: serie,
           estado: "disponible",
           fechaCarga: new Date().toISOString(),
           agencia: agenciaCargaActiva,

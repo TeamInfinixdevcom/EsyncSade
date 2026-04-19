@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 
 import { collection, query, where, getDocs, doc, runTransaction, onSnapshot } from "firebase/firestore";
 import { db, auth } from "./firebase";
-import { getUserAgency } from "./userProfile";
+import { getUserAgency, isGeneralAdmin, normalizeAgency } from "./userProfile";
 import "./forms.css";
 
 const REQUEST_MODES = {
@@ -21,12 +21,59 @@ export default function EsimRequestForm({ user }) {
   const [esimsDisponibles, setEsimsDisponibles] = useState(null);
   const [cargandoDisponibles, setCargandoDisponibles] = useState(false);
   const [errorDisponibles, setErrorDisponibles] = useState("");
+  const [agenciasDisponibles, setAgenciasDisponibles] = useState([]);
+  const [agenciaSeleccionada, setAgenciaSeleccionada] = useState("");
 
   const [serieAsignada, setSerieAsignada] = useState("");
   const agenciaUsuario = getUserAgency(user);
+  const adminGeneral = isGeneralAdmin(user);
+  const agenciaActiva = adminGeneral ? normalizeAgency(agenciaSeleccionada) : agenciaUsuario;
 
   useEffect(() => {
-    if (!agenciaUsuario) {
+    if (!adminGeneral) {
+      setAgenciasDisponibles([]);
+      setAgenciaSeleccionada("");
+      return;
+    }
+
+    const qAgencias = query(
+      collection(db, "esims"),
+      where("estado", "==", "disponible")
+    );
+
+    const unsubscribe = onSnapshot(
+      qAgencias,
+      (snap) => {
+        const agenciesSet = new Set();
+        snap.forEach((docu) => {
+          const agency = normalizeAgency(docu.data().agencia);
+          if (agency) agenciesSet.add(agency);
+        });
+
+        const orderedAgencies = Array.from(agenciesSet).sort((a, b) => a.localeCompare(b));
+        setAgenciasDisponibles(orderedAgencies);
+
+        setAgenciaSeleccionada((prev) => {
+          const current = normalizeAgency(prev);
+          if (current && orderedAgencies.includes(current)) return current;
+
+          const agencyFromProfile = normalizeAgency(agenciaUsuario);
+          if (agencyFromProfile && orderedAgencies.includes(agencyFromProfile)) return agencyFromProfile;
+
+          return orderedAgencies[0] || "";
+        });
+      },
+      () => {
+        setAgenciasDisponibles([]);
+        setAgenciaSeleccionada("");
+      }
+    );
+
+    return () => unsubscribe();
+  }, [adminGeneral, agenciaUsuario]);
+
+  useEffect(() => {
+    if (!agenciaActiva) {
       setEsimsDisponibles(null);
       setErrorDisponibles("");
       setCargandoDisponibles(false);
@@ -39,7 +86,7 @@ export default function EsimRequestForm({ user }) {
     const qDisponibles = query(
       collection(db, "esims"),
       where("estado", "==", "disponible"),
-      where("agencia", "==", agenciaUsuario)
+      where("agencia", "==", agenciaActiva)
     );
 
     const unsubscribe = onSnapshot(
@@ -49,13 +96,13 @@ export default function EsimRequestForm({ user }) {
         setCargandoDisponibles(false);
       },
       () => {
-        setErrorDisponibles("No se pudo cargar el inventario de eSIMs para tu agencia.");
+        setErrorDisponibles(`No se pudo cargar el inventario de eSIMs para la agencia ${agenciaActiva}.`);
         setCargandoDisponibles(false);
       }
     );
 
     return () => unsubscribe();
-  }, [agenciaUsuario]);
+  }, [agenciaActiva]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -65,10 +112,14 @@ export default function EsimRequestForm({ user }) {
     const numeroLimpio = numero.trim();
     const cedulaLimpia = cedula.trim();
     const isCambioKomercial = requestMode === REQUEST_MODES.komercial;
-    const agencia = agenciaUsuario;
+    const agencia = agenciaActiva;
 
     if (!agencia) {
-      setMsg("Error: Tu usuario no tiene agencia asignada. Contacta al administrador general.");
+      setMsg(
+        adminGeneral
+          ? "Error: Debes seleccionar una agencia para solicitar la eSIM."
+          : "Error: Tu usuario no tiene agencia asignada. Contacta al administrador general."
+      );
       return;
     }
 
@@ -161,18 +212,42 @@ export default function EsimRequestForm({ user }) {
           Selecciona el tipo de gestion y el sistema asignara la siguiente serie disponible.
         </p>
 
-        {agenciaUsuario && (
+        {adminGeneral && (
+          <div className="form-field" style={{ marginBottom: 12 }}>
+            <label className="form-label" htmlFor="agenciaSolicitud">Agencia (punto) para rebajar inventario</label>
+            <select
+              id="agenciaSolicitud"
+              className="form-input"
+              value={agenciaSeleccionada}
+              onChange={(e) => setAgenciaSeleccionada(e.target.value)}
+              required
+            >
+              {agenciasDisponibles.length === 0 ? (
+                <option value="">No hay agencias con eSIMs disponibles</option>
+              ) : (
+                agenciasDisponibles.map((agencia) => (
+                  <option key={agencia} value={agencia}>{agencia}</option>
+                ))
+              )}
+            </select>
+            <p className="form-hint" style={{ marginTop: 8 }}>
+              Como admin general, aqui defines desde que punto/agencia se descuenta la eSIM.
+            </p>
+          </div>
+        )}
+
+        {agenciaActiva && (
           <div className={`form-availability ${isLowStock ? "is-low-stock" : ""}`}>
-            <span className="form-availability__label">Quedan disponibles en {agenciaUsuario}</span>
+            <span className="form-availability__label">Quedan disponibles en {agenciaActiva}</span>
             <span className="form-availability__value">
               {cargandoDisponibles ? "Cargando..." : esimsDisponibles ?? 0}
             </span>
           </div>
         )}
 
-        {agenciaUsuario && isLowStock && (
+        {agenciaActiva && isLowStock && (
           <div className="form-stock-alert">
-            Alerta: quedan {esimsDisponibles} eSIMs disponibles en {agenciaUsuario}.
+            Alerta: quedan {esimsDisponibles} eSIMs disponibles en {agenciaActiva}.
           </div>
         )}
 
@@ -200,7 +275,11 @@ export default function EsimRequestForm({ user }) {
         </div>
 
         <div className="form-grid">
-          {!isCambioKomercial ? (
+          {isCambioKomercial ? (
+            <p className="form-hint">
+              En este modo no se requiere pedido. El sistema registrara la gestion como Cambio SIM por Komercial.
+            </p>
+          ) : (
             <div className="form-field">
               <label className="form-label" htmlFor="pedido">Numero de pedido</label>
               <input
@@ -213,10 +292,6 @@ export default function EsimRequestForm({ user }) {
                 required
               />
             </div>
-          ) : (
-            <p className="form-hint">
-              En este modo no se requiere pedido. El sistema registrara la gestion como Cambio SIM por Komercial.
-            </p>
           )}
 
           <div className="form-field">
@@ -246,7 +321,7 @@ export default function EsimRequestForm({ user }) {
           </div>
         </div>
 
-        <button type="submit" className="form-button form-button--primary">
+        <button type="submit" disabled={!agenciaActiva} className="form-button form-button--primary">
           {isCambioKomercial ? "Registrar cambio SIM" : "Generar solicitud"}
         </button>
 

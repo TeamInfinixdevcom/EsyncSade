@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { db } from "./firebase";
 import EsimPieChart from "./EsimPieChart";
+import Barcode from "react-barcode";
 import { getUserAgency, isGeneralAdmin, sameAgency } from "./userProfile";
 
 function normalizeStatus(value) {
@@ -21,6 +22,11 @@ export default function Dashboard({ user }) {
   const [devoluciones, setDevoluciones] = useState(0);
   const [solicitudesPorEjecutivo, setSolicitudesPorEjecutivo] = useState({});
   const [error, setError] = useState("");
+  const [mostrarDetalleDisponibles, setMostrarDetalleDisponibles] = useState(false);
+  const [detalleDisponibles, setDetalleDisponibles] = useState([]);
+  const [cargandoDetalleDisponibles, setCargandoDetalleDisponibles] = useState(false);
+  const [errorDetalleDisponibles, setErrorDetalleDisponibles] = useState("");
+  const [filtroSerieDisponibles, setFiltroSerieDisponibles] = useState("");
   const agenciaUsuario = getUserAgency(user);
   const canSeeAll = isGeneralAdmin(user);
 
@@ -124,6 +130,71 @@ export default function Dashboard({ user }) {
     return { disponibles, usadas, total };
   }, [canSeeAll, agenciaGraficaSeleccionada, estadoPorAgencia, disponibles, usadas, total, agenciaUsuario]);
 
+  const agenciaFiltroDisponibles = canSeeAll ? agenciaGraficaSeleccionada : agenciaUsuario;
+
+  useEffect(() => {
+    if (!mostrarDetalleDisponibles) return;
+
+    if (!canSeeAll && !agenciaUsuario) {
+      setDetalleDisponibles([]);
+      setErrorDetalleDisponibles("No tienes agencia asignada para consultar eSIMs disponibles.");
+      setCargandoDetalleDisponibles(false);
+      return;
+    }
+
+    setCargandoDetalleDisponibles(true);
+    setErrorDetalleDisponibles("");
+
+    const constraints = [where("estado", "==", "disponible")];
+    if (agenciaFiltroDisponibles) {
+      constraints.push(where("agencia", "==", agenciaFiltroDisponibles));
+    }
+
+    const source = query(collection(db, "esims"), ...constraints);
+
+    const unsub = onSnapshot(
+      source,
+      (snapshot) => {
+        const rows = snapshot.docs.map((docu) => {
+          const data = docu.data();
+          const serie = String(data.serie || "").trim();
+          const codigoBarras = String(data.codigoBarras || data.barcode || serie).trim();
+
+          return {
+            id: docu.id,
+            serie,
+            codigoBarras,
+            agencia: String(data.agencia || "").trim() || "Sin agencia",
+            loteId: String(data.loteId || "").trim(),
+            fechaCarga: data.fechaCarga || "",
+          };
+        });
+
+        setDetalleDisponibles(rows);
+        setCargandoDetalleDisponibles(false);
+      },
+      () => {
+        setErrorDetalleDisponibles("No se pudo cargar el detalle de eSIMs disponibles.");
+        setCargandoDetalleDisponibles(false);
+      }
+    );
+
+    return () => unsub();
+  }, [mostrarDetalleDisponibles, canSeeAll, agenciaUsuario, agenciaFiltroDisponibles]);
+
+  const detalleDisponiblesFiltrado = useMemo(() => {
+    const filtro = filtroSerieDisponibles.trim().toLowerCase();
+    const rowsOrdenadas = [...detalleDisponibles].sort((a, b) => a.serie.localeCompare(b.serie));
+
+    if (!filtro) return rowsOrdenadas;
+
+    return rowsOrdenadas.filter((row) => {
+      const serie = String(row.serie || "").toLowerCase();
+      const agencia = String(row.agencia || "").toLowerCase();
+      return serie.includes(filtro) || agencia.includes(filtro);
+    });
+  }, [detalleDisponibles, filtroSerieDisponibles]);
+
   // Consultar y agrupar solicitudes por ejecutivo (email)
   useEffect(() => {
     if (!canSeeAll && !agenciaUsuario) {
@@ -218,10 +289,25 @@ export default function Dashboard({ user }) {
           marginBottom: 24,
         }}
       >
-        <div style={{ background: "#181818", borderRadius: 16, padding: 18, boxShadow: "0 0 16px 2px #00fff7cc" }}>
+        <button
+          type="button"
+          onClick={() => setMostrarDetalleDisponibles((prev) => !prev)}
+          style={{
+            background: "#181818",
+            borderRadius: 16,
+            border: mostrarDetalleDisponibles ? "1px solid #00fff7" : "1px solid transparent",
+            padding: 18,
+            boxShadow: "0 0 16px 2px #00fff7cc",
+            cursor: "pointer",
+            textAlign: "left",
+          }}
+        >
           <div style={{ fontSize: 14, color: "#00fff7", textShadow: "0 1px 8px #00fff7cc" }}>Disponibles</div>
           <div style={{ fontSize: 30, fontWeight: "bold", color: "#00fff7", textShadow: "0 1px 8px #00fff7cc" }}>{metricasVisibles.disponibles}</div>
-        </div>
+          <div style={{ marginTop: 6, fontSize: 12, color: "#b5fffb", fontWeight: 700 }}>
+            {mostrarDetalleDisponibles ? "Ocultar lista y codigos" : "Ver lista y codigos de barras"}
+          </div>
+        </button>
         <div style={{ background: "#181818", borderRadius: 16, padding: 18, boxShadow: "0 0 16px 2px #ff3c2fcc" }}>
           <div style={{ fontSize: 14, color: "#ff3c2f", textShadow: "0 1px 8px #ff3c2fcc" }}>Usadas</div>
           <div style={{ fontSize: 30, fontWeight: "bold", color: "#ff3c2f", textShadow: "0 1px 8px #ff3c2fcc" }}>{metricasVisibles.usadas}</div>
@@ -239,6 +325,97 @@ export default function Dashboard({ user }) {
           <div style={{ fontSize: 30, fontWeight: "bold", color: "#bd34fe", textShadow: "0 1px 8px #bd34fecc" }}>{devoluciones}</div>
         </div>
       </div>
+
+      {mostrarDetalleDisponibles && (
+        <section
+          className="barcode-print-area"
+          style={{
+            marginBottom: 24,
+            background: "#f8fbff",
+            color: "#0f1c2d",
+            borderRadius: 16,
+            border: "2px solid #00d9cf",
+            boxShadow: "0 12px 30px #00132966",
+            padding: 16,
+          }}
+        >
+          <div className="no-print" style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", marginBottom: 12 }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: 18, color: "#0f1c2d" }}>
+                Inventario disponible{agenciaFiltroDisponibles ? ` - ${agenciaFiltroDisponibles}` : ""}
+              </h3>
+              <p style={{ margin: "4px 0 0", fontSize: 13, color: "#2d4b68", fontWeight: 600 }}>
+                Cada tarjeta muestra la serie y su codigo de barras (CODE128) listo para imprimir y escanear.
+              </p>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <input
+                type="text"
+                value={filtroSerieDisponibles}
+                onChange={(e) => setFiltroSerieDisponibles(e.target.value)}
+                placeholder="Buscar por serie o agencia"
+                style={{ minWidth: 220, padding: "8px 10px", borderRadius: 8, border: "1px solid #6aa6c8", background: "#fff", color: "#0f1c2d", fontWeight: 600 }}
+              />
+              <button
+                type="button"
+                onClick={() => window.print()}
+                style={{ background: "#0f1c2d", color: "#fff", border: "none", borderRadius: 8, padding: "8px 12px", fontWeight: 800, cursor: "pointer" }}
+              >
+                Imprimir codigos
+              </button>
+            </div>
+          </div>
+
+          {errorDetalleDisponibles && (
+            <div style={{ marginBottom: 12, color: "#8a1f24", fontWeight: 700, border: "1px solid #e6adb0", background: "#ffe9ea", borderRadius: 10, padding: "8px 10px" }}>
+              {errorDetalleDisponibles}
+            </div>
+          )}
+
+          {cargandoDetalleDisponibles ? (
+            <div style={{ color: "#1a3650", fontWeight: 700 }}>Cargando eSIMs disponibles...</div>
+          ) : detalleDisponiblesFiltrado.length === 0 ? (
+            <div style={{ color: "#2d4b68", fontWeight: 700 }}>No hay eSIMs disponibles con ese filtro.</div>
+          ) : (
+            <div className="barcode-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(270px, 1fr))", gap: 12 }}>
+              {detalleDisponiblesFiltrado.map((item) => (
+                <article
+                  key={item.id}
+                  className="barcode-ticket"
+                  style={{
+                    border: "1.5px solid #b8cfdf",
+                    borderRadius: 12,
+                    background: "#fff",
+                    padding: 12,
+                    display: "grid",
+                    gap: 6,
+                  }}
+                >
+                  <div style={{ fontSize: 15, fontWeight: 900, color: "#0f1c2d", letterSpacing: 0.3 }}>{item.serie}</div>
+                  <div style={{ border: "1px dashed #8aa8c0", borderRadius: 8, padding: "6px 8px", background: "#f8fbff", overflowX: "auto" }}>
+                    <Barcode
+                      value={item.codigoBarras || item.serie}
+                      format="CODE128"
+                      height={52}
+                      width={1.5}
+                      margin={0}
+                      background="transparent"
+                      lineColor="#111111"
+                      displayValue={false}
+                    />
+                  </div>
+                  <div style={{ fontSize: 12, color: "#324e67", fontWeight: 700 }}>Agencia: {item.agencia}</div>
+                  <div style={{ fontSize: 12, color: "#476680" }}>Lote: {item.loteId || "Sin lote"}</div>
+                  <div style={{ fontSize: 12, color: "#476680" }}>
+                    Carga: {item.fechaCarga ? new Date(item.fechaCarga).toLocaleString() : "Sin fecha"}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       <div
         style={{

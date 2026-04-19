@@ -15,6 +15,7 @@
     "firebase": "^12.7.0",
     "firebase-admin": "^13.6.0",
     "react": "^19.2.0",
+    "react-barcode": "^1.6.1",
     "react-dom": "^19.2.0",
     "recharts": "^3.6.0"
   },
