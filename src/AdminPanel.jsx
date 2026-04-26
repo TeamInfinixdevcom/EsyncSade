@@ -5,10 +5,30 @@ import { deleteApp, initializeApp } from "firebase/app";
 import { auth, firebaseConfig } from "./firebase";
 import { getUserAgency, isAgencyAdmin, isGeneralAdmin, isUserAdmin, normalizeAgency, sameAgency } from "./userProfile";
 import Dashboard from "./Dashboard";
+import TeamReturnsTable from "./TeamReturnsTable";
 
 function extractSeries(text) {
   const matches = text.match(/\b\d{20}\b/g);
   return matches ? matches.sort() : [];
+}
+
+function formatDateTimeWithSeconds(value) {
+  if (!value) return "-";
+
+  const raw = typeof value?.toDate === "function" ? value.toDate() : value;
+  const date = raw instanceof Date ? raw : new Date(raw);
+
+  if (Number.isNaN(date.getTime())) return "-";
+
+  return date.toLocaleString("es-CR", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
 }
 
 export default function AdminPanel({ user }) {
@@ -45,12 +65,21 @@ export default function AdminPanel({ user }) {
   const [guardandoUsuario, setGuardandoUsuario] = useState(false);
   const [vistaAgrupadaAgencias, setVistaAgrupadaAgencias] = useState(true);
   const [agenciasExpandidas, setAgenciasExpandidas] = useState({});
+  
+  // Estados para reportes
+  const [solicitudes, setSolicitudes] = useState([]);
+  const [cargandoSolicitudes, setCargandoSolicitudes] = useState(false);
+  const [filtroReportes, setFiltroReportes] = useState("");
+  const [paginaReportes, setPaginaReportes] = useState(1);
+  const [agenciaReportesSeleccionada, setAgenciaReportesSeleccionada] = useState("");
 
   const panelWidth =
     view === "dashboard"
       ? "min(96vw, 1280px)"
       : view === "agentes"
       ? "min(96vw, 1000px)"
+      : view === "reportes"
+      ? "min(96vw, 1280px)"
       : "min(96vw, 1120px)";
 
   const agenciaCargaActiva = generalAdmin ? normalizeAgency(agenciaCarga) : agenciaAdmin;
@@ -96,6 +125,26 @@ export default function AdminPanel({ user }) {
       return a[0].localeCompare(b[0]);
     });
   }, [usuariosFiltrados]);
+
+  const solicitudesFiltradas = useMemo(() => {
+    const filtro = filtroReportes.trim().toLowerCase();
+    if (!filtro) return solicitudes;
+
+    return solicitudes.filter((s) =>
+      [s.numero, s.cedula, s.pedido, s.tipoGestion, s.detalleGestion, s.usuario, s.agencia]
+        .some((v) => String(v || "").toLowerCase().includes(filtro))
+    );
+  }, [solicitudes, filtroReportes]);
+
+  const solicitudesPaginadas = useMemo(() => {
+    const inicio = (paginaReportes - 1) * PAGE_SIZE;
+    const fin = inicio + PAGE_SIZE;
+    return solicitudesFiltradas.slice(inicio, fin);
+  }, [solicitudesFiltradas, paginaReportes]);
+
+  const totalPaginasReportes = useMemo(() => {
+    return Math.ceil(solicitudesFiltradas.length / PAGE_SIZE);
+  }, [solicitudesFiltradas]);
 
   const iniciarEdicionUsuario = (usuarioRow) => {
     setEditandoUsuarioId(usuarioRow.id);
@@ -169,7 +218,7 @@ export default function AdminPanel({ user }) {
       cancelarEdicionUsuario();
       fetchAgentes();
       fetchAgencias();
-    } catch (err) {
+    } catch {
       setMensajeAgente("No se pudo actualizar el usuario.");
     }
 
@@ -205,7 +254,7 @@ export default function AdminPanel({ user }) {
       setMensajeAgente(`Usuario ${email} eliminado correctamente.`);
       fetchAgentes();
       fetchAgencias();
-    } catch (err) {
+    } catch {
       setMensajeAgente("No se pudo eliminar el usuario.");
     }
   };
@@ -257,7 +306,7 @@ export default function AdminPanel({ user }) {
         })
         .sort((a, b) => new Date(b.fechaCreacion || b.fecha || 0) - new Date(a.fechaCreacion || a.fecha || 0));
       setAgentes(rows);
-    } catch (err) {
+    } catch {
       setMensajeAgente("No se pudo cargar la lista de agentes.");
     }
     setCargandoAgentes(false);
@@ -303,6 +352,46 @@ export default function AdminPanel({ user }) {
       const agenciasOrdenadas = Array.from(setAgencias).sort((a, b) => a.localeCompare(b));
       setAgenciasDisponibles(agenciasOrdenadas);
     }
+  };
+
+  const fetchSolicitudes = async () => {
+    setCargandoSolicitudes(true);
+    try {
+      const db = getFirestore();
+      let q;
+
+      if (generalAdmin) {
+        const agenciaFiltro = agenciaReportesSeleccionada
+          ? normalizeAgency(agenciaReportesSeleccionada)
+          : null;
+
+        if (agenciaFiltro) {
+          q = query(
+            collection(db, "solicitudes"),
+            where("agencia", "==", agenciaFiltro)
+          );
+        } else {
+          q = collection(db, "solicitudes");
+        }
+      } else {
+        q = query(
+          collection(db, "solicitudes"),
+          where("agencia", "==", agenciaAdmin)
+        );
+      }
+
+      const snap = await getDocs(q);
+      const rows = snap.docs
+        .map((docu) => ({ id: docu.id, ...docu.data() }))
+        .sort((a, b) => new Date(b.fecha || 0) - new Date(a.fecha || 0));
+
+      setSolicitudes(rows);
+      setPaginaReportes(1);
+    } catch (err) {
+      console.error("Error cargando solicitudes:", err);
+      setSolicitudes([]);
+    }
+    setCargandoSolicitudes(false);
   };
 
   const handleCrearAgente = async (e) => {
@@ -415,6 +504,13 @@ export default function AdminPanel({ user }) {
   }, [view, generalAdmin, agenciaAdmin]);
 
   useEffect(() => {
+    if (view === "reportes") {
+      fetchSolicitudes();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, generalAdmin, agenciaAdmin, agenciaReportesSeleccionada]);
+
+  useEffect(() => {
     if (!generalAdmin) return;
 
     setAgenciasExpandidas((prev) => {
@@ -476,7 +572,7 @@ export default function AdminPanel({ user }) {
       setSeries([]);
       setInput("");
       fetchAgencias();
-    } catch (err) {
+    } catch {
       setMensaje("Error al subir las series. Intenta de nuevo.");
     }
     setSubiendo(false);
@@ -697,6 +793,48 @@ export default function AdminPanel({ user }) {
     </table>
   );
 
+  const renderSolicitudesTable = (rows) => (
+    <table style={{ width: "100%", borderCollapse: "collapse", background: "#232323", borderRadius: 12, overflow: "hidden", fontSize: 13 }}>
+      <thead>
+        <tr style={{ background: "#ff66ff22", color: "#fff" }}>
+          <th style={{ textAlign: "left", padding: 8 }}>Número</th>
+          <th style={{ textAlign: "left", padding: 8 }}>Cédula</th>
+          <th style={{ textAlign: "left", padding: 8 }}>Pedido</th>
+          <th style={{ textAlign: "left", padding: 8 }}>Tipo</th>
+          <th style={{ textAlign: "left", padding: 8 }}>Agencia</th>
+          <th style={{ textAlign: "left", padding: 8 }}>Usuario</th>
+          <th style={{ textAlign: "left", padding: 8 }}>Fecha</th>
+          <th style={{ textAlign: "left", padding: 8 }}>Serie</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((s) => (
+          <tr key={s.id} style={{ borderBottom: "1px solid #3b3b3b", "&:hover": { background: "#2a2a2a" } }}>
+            <td style={{ padding: 8 }}>{s.numero || "-"}</td>
+            <td style={{ padding: 8 }}>{s.cedula || "-"}</td>
+            <td style={{ padding: 8 }}>{s.pedido || "-"}</td>
+            <td style={{ padding: 8 }}>
+              <span style={{
+                background: s.tipoGestion === "plan_nuevo_komercial" ? "#ff66ff" : s.tipoGestion === "cambio_sim_komercial" ? "#bd34fe" : "#00fff7",
+                color: "#181818",
+                padding: "2px 6px",
+                borderRadius: 4,
+                fontSize: 11,
+                fontWeight: 700
+              }}>
+                {s.detalleGestion || s.tipoGestion || "-"}
+              </span>
+            </td>
+            <td style={{ padding: 8 }}>{s.agencia || "-"}</td>
+            <td style={{ padding: 8 }}>{s.usuario ? s.usuario.split("@")[0] : "-"}</td>
+            <td style={{ padding: 8 }}>{formatDateTimeWithSeconds(s.fecha)}</td>
+            <td style={{ padding: 8, fontFamily: "monospace", fontSize: 11 }}>{s.serie || "-"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+
   return (
     <div style={{ width: panelWidth, margin: "32px auto", background: "#181818", borderRadius: 24, boxShadow: "0 0 32px 4px #ff34fccc", border: "2.5px solid #ff34fc", padding: "1.6rem 1rem", color: "#fff", boxSizing: "border-box" }}>
       <div style={{ display: "flex", gap: 16, marginBottom: 24, justifyContent: "center", flexWrap: "wrap" }}>
@@ -712,6 +850,10 @@ export default function AdminPanel({ user }) {
           onClick={() => setView("agentes")}
           style={{ background: view === "agentes" ? "#ffe066" : "#232323", color: view === "agentes" ? "#181818" : "#ffe066", border: 'none', borderRadius: 12, padding: '0.7rem 2rem', fontWeight: 900, fontSize: 18, boxShadow: view === "agentes" ? '0 2px 16px #ffe066cc' : 'none', cursor: 'pointer', letterSpacing: 1, textShadow: view === "agentes" ? '0 1px 8px #fff' : '0 1px 8px #ffe066cc' }}
         >Usuarios</button>
+        <button
+          onClick={() => setView("reportes")}
+          style={{ background: view === "reportes" ? "#ff66ff" : "#232323", color: view === "reportes" ? "#fff" : "#ff66ff", border: 'none', borderRadius: 12, padding: '0.7rem 2rem', fontWeight: 900, fontSize: 18, boxShadow: view === "reportes" ? '0 2px 16px #ff66ffcc' : 'none', cursor: 'pointer', letterSpacing: 1, textShadow: view === "reportes" ? '0 1px 8px #fff' : '0 1px 8px #ff66ffcc' }}
+        >Reportes</button>
       </div>
       {view === "dashboard" && (
         <Dashboard user={user} />
@@ -963,6 +1105,110 @@ export default function AdminPanel({ user }) {
               )}
             </>
           )}
+        </div>
+      )}
+      {view === "reportes" && (
+        <div style={{ width: '100%', maxWidth: 1280, margin: "0 auto", background: "#181818", borderRadius: 20, boxShadow: "0 0 32px 4px #ff66ffcc", padding: "2.5vw 2vw", color: "#fff", boxSizing: 'border-box' }}>
+          <h2 style={{ color: "#ff66ff", textShadow: '0 2px 12px #ff66ffcc, 0 0 2px #fff', fontWeight: 900, letterSpacing: 2 }}>Reportes de Solicitudes</h2>
+
+          {generalAdmin && (
+            <div style={{ marginBottom: 20, display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+              <div>
+                <label style={{ display: "block", marginBottom: 6, color: "#ff99ff", fontWeight: 700, fontSize: 13 }}>Filtrar por agencia</label>
+                <select
+                  value={agenciaReportesSeleccionada}
+                  onChange={(e) => setAgenciaReportesSeleccionada(e.target.value)}
+                  style={{ padding: 8, borderRadius: 6, border: "1.5px solid #ff66ff", background: "#232323", color: "#fff", fontSize: 13 }}
+                >
+                  <option value="">Todas las agencias</option>
+                  {agenciasDisponibles.map((agencia) => (
+                    <option key={agencia} value={agencia}>{agencia}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginBottom: 16 }}>
+            <input
+              type="text"
+              placeholder="Buscar por número, cédula, pedido, tipo o usuario..."
+              value={filtroReportes}
+              onChange={(e) => setFiltroReportes(e.target.value)}
+              style={{ width: "100%", padding: 10, borderRadius: 8, border: "1.5px solid #ff66ff", background: "#232323", color: "#fff", fontSize: 14, outline: "none" }}
+            />
+          </div>
+
+          <div style={{ marginBottom: 12, color: "#ff99ff", fontSize: 13, fontWeight: 700 }}>
+            Mostrando {solicitudesPaginadas.length} de {solicitudesFiltradas.length} solicitudes
+          </div>
+
+          {cargandoSolicitudes ? (
+            <div style={{ color: "#ff99ff", fontWeight: 700 }}>Cargando reportes...</div>
+          ) : solicitudesFiltradas.length === 0 ? (
+            <div style={{ color: "#ffccff", fontWeight: 700 }}>No hay solicitudes que coincidan con los filtros.</div>
+          ) : (
+            <>
+              <div style={{ overflowX: "auto", marginBottom: 20 }}>
+                {renderSolicitudesTable(solicitudesPaginadas)}
+              </div>
+
+              {totalPaginasReportes > 1 && (
+                <div style={{ display: "flex", gap: 8, justifyContent: "center", alignItems: "center", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={() => setPaginaReportes(1)}
+                    disabled={paginaReportes === 1}
+                    style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #ff66ff", background: paginaReportes === 1 ? "#4a4a4a" : "#232323", color: "#ff66ff", fontWeight: 700, cursor: paginaReportes === 1 ? "not-allowed" : "pointer" }}
+                  >
+                    Primera
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaginaReportes(Math.max(1, paginaReportes - 1))}
+                    disabled={paginaReportes === 1}
+                    style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #ff66ff", background: paginaReportes === 1 ? "#4a4a4a" : "#232323", color: "#ff66ff", fontWeight: 700, cursor: paginaReportes === 1 ? "not-allowed" : "pointer" }}
+                  >
+                    Anterior
+                  </button>
+                  {Array.from({ length: totalPaginasReportes }, (_, i) => i + 1)
+                    .filter((n) => Math.abs(n - paginaReportes) <= 2 || n === 1 || n === totalPaginasReportes)
+                    .map((n, idx, arr) => (
+                      <span key={n}>
+                        {idx > 0 && arr[idx - 1] !== n - 1 && <span style={{ color: "#ff99ff" }}>...</span>}
+                        <button
+                          type="button"
+                          onClick={() => setPaginaReportes(n)}
+                          style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #ff66ff", background: paginaReportes === n ? "#ff66ff" : "#232323", color: paginaReportes === n ? "#181818" : "#ff66ff", fontWeight: paginaReportes === n ? 900 : 700, cursor: "pointer" }}
+                        >
+                          {n}
+                        </button>
+                      </span>
+                    ))}
+                  <button
+                    type="button"
+                    onClick={() => setPaginaReportes(Math.min(totalPaginasReportes, paginaReportes + 1))}
+                    disabled={paginaReportes === totalPaginasReportes}
+                    style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #ff66ff", background: paginaReportes === totalPaginasReportes ? "#4a4a4a" : "#232323", color: "#ff66ff", fontWeight: 700, cursor: paginaReportes === totalPaginasReportes ? "not-allowed" : "pointer" }}
+                  >
+                    Siguiente
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaginaReportes(totalPaginasReportes)}
+                    disabled={paginaReportes === totalPaginasReportes}
+                    style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #ff66ff", background: paginaReportes === totalPaginasReportes ? "#4a4a4a" : "#232323", color: "#ff66ff", fontWeight: 700, cursor: paginaReportes === totalPaginasReportes ? "not-allowed" : "pointer" }}
+                  >
+                    Última
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
+          <div style={{ marginTop: 28 }}>
+            <TeamReturnsTable user={user} />
+          </div>
         </div>
       )}
     </div>

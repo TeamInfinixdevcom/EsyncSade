@@ -1,0 +1,230 @@
+.esim-radar {
+  position: relative;
+  width: 100%;
+  height: 272px;
+  border-radius: 14px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(0, 255, 247, 0.08) 0, rgba(4, 20, 22, 0.7) 32%, rgba(2, 8, 10, 0.98) 100%);
+  border: 1px solid rgba(0, 255, 247, 0.24);
+}
+
+.esim-radar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(0deg, rgba(0, 255, 247, 0.03) 0 1px, transparent 1px 14px),
+    repeating-linear-gradient(90deg, rgba(0, 255, 247, 0.03) 0 1px, transparent 1px 14px);
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+.esim-radar__readout {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 4;
+  display: grid;
+  gap: 4px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: #7cecea;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.esim-radar__readout span {
+  border: 1px solid rgba(124, 236, 234, 0.45);
+  border-radius: 6px;
+  background: rgba(5, 15, 17, 0.72);
+  padding: 4px 6px;
+  text-align: right;
+  text-shadow: 0 0 8px rgba(124, 236, 234, 0.35);
+}
+
+.esim-radar__hud {
+  position: absolute;
+  inset: 16px;
+  pointer-events: none;
+  transform: perspective(700px) rotateX(58deg) scale(1.02);
+  transform-origin: center 62%;
+  opacity: calc(0.52 + (var(--signal-strength, 0.5) * 0.35));
+  z-index: 1;
+}
+
+.esim-radar__sweep {
+  position: absolute;
+  inset: 1%;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    rgba(0, 255, 247, 0.42),
+    rgba(0, 255, 247, 0.05) 24deg,
+    rgba(0, 255, 247, 0) 70deg,
+    rgba(0, 255, 247, 0) 360deg
+  );
+  mix-blend-mode: screen;
+  animation: esim-radar-sweep var(--sweep-duration, 5.8s) linear infinite;
+}
+
+.esim-radar__pulse {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 14%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 1px solid rgba(142, 255, 251, 0.58);
+  transform: translate(-50%, -50%);
+  animation: esim-radar-pulse var(--pulse-duration, 2.8s) ease-in-out infinite;
+}
+
+.esim-radar__ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 255, 247, 0.35);
+  transform: translate(-50%, -50%);
+}
+
+.esim-radar__ring--outer {
+  width: 96%;
+  height: 96%;
+}
+
+.esim-radar__ring--mid {
+  width: 72%;
+  height: 72%;
+}
+
+.esim-radar__ring--inner {
+  width: 48%;
+  height: 48%;
+}
+
+.esim-radar__ring--core {
+  width: 26%;
+  height: 26%;
+}
+
+.esim-radar__crosshair {
+  position: absolute;
+  background: linear-gradient(90deg, transparent, rgba(0, 255, 247, 0.45), transparent);
+}
+
+.esim-radar__crosshair--x {
+  left: 2%;
+  right: 2%;
+  top: 50%;
+  height: 1px;
+}
+
+.esim-radar__crosshair--y {
+  top: 2%;
+  bottom: 2%;
+  left: 50%;
+  width: 1px;
+  background: linear-gradient(0deg, transparent, rgba(0, 255, 247, 0.45), transparent);
+}
+
+.esim-radar__blip {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  animation: esim-radar-blip var(--pulse-duration, 2.8s) ease-in-out infinite;
+}
+
+.esim-radar__blip.is-available {
+  background: #98fffa;
+  box-shadow: 0 0 0 0 rgba(120, 255, 250, 0.45), 0 0 7px rgba(120, 255, 250, 0.8);
+}
+
+.esim-radar__blip.is-used {
+  background: #ff786a;
+  box-shadow: 0 0 0 0 rgba(255, 120, 106, 0.4), 0 0 7px rgba(255, 120, 106, 0.75);
+}
+
+.esim-radar__chart-layer {
+  position: relative;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  padding-top: 6px;
+}
+
+.esim-radar__chart-layer .recharts-wrapper {
+  filter: drop-shadow(0 0 10px rgba(0, 255, 247, 0.25));
+}
+
+.esim-radar__empty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #95f7f2;
+  font-weight: 700;
+  text-shadow: 0 0 10px rgba(149, 247, 242, 0.35);
+}
+
+@keyframes esim-radar-sweep {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes esim-radar-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: translate(-50%, -50%) scale(0.88);
+  }
+
+  50% {
+    opacity: 0.9;
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+}
+
+@keyframes esim-radar-blip {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: translate(-50%, -50%) scale(0.8);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.2);
+  }
+}
+
+@media (max-width: 640px) {
+  .esim-radar {
+    height: 248px;
+  }
+
+  .esim-radar__hud {
+    inset: 18px;
+    transform: perspective(680px) rotateX(50deg) scale(1);
+  }
+
+  .esim-radar__readout {
+    font-size: 9px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .esim-radar__sweep,
+  .esim-radar__pulse,
+  .esim-radar__blip {
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+  }
+}

@@ -40,3 +40,46 @@
 .read-the-docs {
   color: #888;
 }
+
+@keyframes nav-feature-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 14px rgba(0, 255, 247, 0.24), 0 0 24px rgba(122, 249, 255, 0.08);
+    transform: translateY(0);
+  }
+
+  50% {
+    box-shadow: 0 0 20px rgba(0, 255, 247, 0.38), 0 0 38px rgba(122, 249, 255, 0.16);
+    transform: translateY(-1px);
+  }
+}
+
+@keyframes nav-feature-sweep {
+  0% {
+    transform: translateX(-130%);
+    opacity: 0;
+  }
+
+  16%,
+  70% {
+    opacity: 1;
+  }
+
+  100% {
+    transform: translateX(130%);
+    opacity: 0;
+  }
+}
+
+@keyframes nav-feature-beacon {
+  0%,
+  100% {
+    transform: scale(0.84);
+    opacity: 0.66;
+  }
+
+  50% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+}

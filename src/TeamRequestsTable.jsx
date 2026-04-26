@@ -3,6 +3,25 @@ import { collection, getDocs, query, where } from "firebase/firestore";
 import { db } from "./firebase";
 import { getUserAgency, isGeneralAdmin, sameAgency } from "./userProfile";
 
+function formatDateTimeWithSeconds(value) {
+  if (!value) return "-";
+
+  const raw = typeof value?.toDate === "function" ? value.toDate() : value;
+  const date = raw instanceof Date ? raw : new Date(raw);
+
+  if (Number.isNaN(date.getTime())) return "-";
+
+  return date.toLocaleString("es-CR", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
 export default function TeamRequestsTable({ user }) {
   const [solicitudes, setSolicitudes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -93,7 +112,7 @@ export default function TeamRequestsTable({ user }) {
                       <td style={{ border: "1px solid #00fff7", padding: "6px 4px" }}>{s.numero || s.numeroCliente || "-"}</td>
                       <td style={{ border: "1px solid #00fff7", padding: "6px 4px" }}>{s.cedula || s.identificacion || "-"}</td>
                       <td style={{ border: "1px solid #00fff7", padding: "6px 4px" }}>{s.usuario}</td>
-                      <td style={{ border: "1px solid #00fff7", padding: "6px 4px" }}>{s.fecha ? new Date(s.fecha).toLocaleString() : "-"}</td>
+                      <td style={{ border: "1px solid #00fff7", padding: "6px 4px" }}>{formatDateTimeWithSeconds(s.fecha)}</td>
                     </tr>
                   ))
                 )}

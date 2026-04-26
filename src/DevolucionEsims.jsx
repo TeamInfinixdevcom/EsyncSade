@@ -93,7 +93,7 @@ export default function DevolucionEsims({ user }) {
 
       setMensaje(`Serie ${serie} devuelta y registrada en tu historial.`);
       setSerie("");
-    } catch (err) {
+    } catch {
       setMensaje("Error al registrar la devolución. Intenta de nuevo.");
     }
 

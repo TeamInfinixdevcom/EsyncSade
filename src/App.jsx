@@ -10,8 +10,6 @@ import EsimRequestForm from "./EsimRequestForm";
 import DevolucionEsims from "./DevolucionEsims";
 import UserReport from "./UserReport";
 import AdminPanel from "./AdminPanel";
-import TeamRequestsTable from "./TeamRequestsTable";
-import TeamReturnsTable from "./TeamReturnsTable";
 
 /* ========= FIREBASE ========= */
 import { auth } from "./firebase";
@@ -25,6 +23,7 @@ function App() {
   const [showSplash, setShowSplash] = useState(true);
 
   const isAdmin = isUserAdmin(user);
+  const sectionActiva = !isAdmin && section === "Panel Admin" ? "Solicitar eSIM" : section;
 
   /* ========= AUTH ========= */
   useEffect(() => {
@@ -49,15 +48,18 @@ function App() {
     return () => unsubscribe();
   }, [showSplash]);
 
-  useEffect(() => {
-    if (!isAdmin && section === "Panel Admin") {
-      setSection("Solicitar eSIM");
-    }
-  }, [isAdmin, section]);
-
   const handleLogout = async () => {
     await auth.signOut();
     setUser(null);
+  };
+
+  const handleSelectSection = (nextSection) => {
+    if (!isAdmin && nextSection === "Panel Admin") {
+      setSection("Solicitar eSIM");
+      return;
+    }
+
+    setSection(nextSection);
   };
 
   /* ========= SPLASH ========= */
@@ -90,12 +92,6 @@ function App() {
     sections["Panel Admin"] = (
       <>
         <AdminPanel user={user} />
-        <div style={{ marginTop: 32 }}>
-          <TeamRequestsTable user={user} />
-        </div>
-        <div style={{ marginTop: 24 }}>
-          <TeamReturnsTable user={user} />
-        </div>
       </>
     );
   }
@@ -105,11 +101,11 @@ function App() {
       <Navbar
         onLogout={handleLogout}
         user={user}
-        onSelect={setSection}
+        onSelect={handleSelectSection}
       />
 
       <main style={styles.main}>
-        {sections[section] || null}
+        {sections[sectionActiva] || null}
       </main>
     </div>
   );

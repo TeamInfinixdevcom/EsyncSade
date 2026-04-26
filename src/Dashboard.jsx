@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { db } from "./firebase";
 import EsimPieChart from "./EsimPieChart";
 import Barcode from "react-barcode";
-import { getUserAgency, isGeneralAdmin, sameAgency } from "./userProfile";
+import { getUserAgency, isGeneralAdmin, normalizeAgency, sameAgency } from "./userProfile";
+import "./dashboard-monarch.css";
 
 function normalizeStatus(value) {
   return String(value || "").trim().toLowerCase();
@@ -13,14 +15,48 @@ function isAvailableStatus(value) {
   return normalizeStatus(value) === "disponible";
 }
 
+function buildSignalVectors(count, variant = "returns") {
+  const safeCount = Math.max(1, count);
+  const total = Math.min(variant === "returns" ? 10 : 8, Math.max(4, Math.round(Math.log2(safeCount + 2) * 2.4)));
+  const radius = variant === "returns" ? 42 : 38;
+
+  return Array.from({ length: total }, (_, index) => {
+    const angle = ((index / total) * Math.PI * 2) - Math.PI / 2;
+    const x = 50 + Math.cos(angle) * radius;
+    const y = 50 + Math.sin(angle) * radius;
+    const rotation = `${Math.atan2(50 - y, 50 - x)}rad`;
+    const strength = 62 + ((index + safeCount) % 4) * 8;
+
+    return {
+      id: `${variant}-${index}`,
+      x,
+      y,
+      angle: rotation,
+      length: `${strength}px`,
+      delay: `${(index % 5) * 0.32}s`,
+      dim: index >= Math.ceil(total * 0.6),
+    };
+  });
+}
+
+function normalizeDateValue(value) {
+  if (!value) return null;
+  const raw = typeof value?.toDate === "function" ? value.toDate() : value;
+  const date = raw instanceof Date ? raw : new Date(raw);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 export default function Dashboard({ user }) {
   const [disponibles, setDisponibles] = useState(0);
   const [usadas, setUsadas] = useState(0);
   const [total, setTotal] = useState(0);
   const [estadoPorAgencia, setEstadoPorAgencia] = useState([]);
+  const [esimsSinAgencia, setEsimsSinAgencia] = useState(0);
   const [agenciaGraficaSeleccionada, setAgenciaGraficaSeleccionada] = useState("");
   const [devoluciones, setDevoluciones] = useState(0);
   const [solicitudesPorEjecutivo, setSolicitudesPorEjecutivo] = useState({});
+  const [solicitudesActividad, setSolicitudesActividad] = useState([]);
+  const [devolucionesActividad, setDevolucionesActividad] = useState([]);
   const [error, setError] = useState("");
   const [mostrarDetalleDisponibles, setMostrarDetalleDisponibles] = useState(false);
   const [detalleDisponibles, setDetalleDisponibles] = useState([]);
@@ -50,32 +86,50 @@ export default function Dashboard({ user }) {
   useEffect(() => {
     setError("");
 
-    if (!canSeeAll && !agenciaUsuario) {
+    const agenciaUsuarioNormalizada = normalizeAgency(agenciaUsuario);
+
+    if (!canSeeAll && !agenciaUsuarioNormalizada) {
       setDisponibles(0);
       setUsadas(0);
       setTotal(0);
       setEstadoPorAgencia([]);
+      setEsimsSinAgencia(0);
       return;
     }
 
+    let settled = false;
+    const timeoutId = setTimeout(() => {
+      if (!settled) {
+        setError("La consulta de metricas esta tardando mas de lo esperado. Intenta recargar.");
+      }
+    }, 12000);
+
     const source = canSeeAll
       ? collection(db, "esims")
-      : query(collection(db, "esims"), where("agencia", "==", agenciaUsuario));
+      : query(collection(db, "esims"), where("agencia", "==", agenciaUsuarioNormalizada));
 
     const unsub = onSnapshot(
       source,
       (snapshot) => {
+        settled = true;
+        clearTimeout(timeoutId);
         let disp = 0, used = 0;
+        let sinAgencia = 0;
         const byAgency = new Map();
 
         snapshot.forEach(doc => {
           const data = doc.data();
           const disponible = isAvailableStatus(data.estado);
 
+          const agencia = normalizeAgency(data.agencia);
+          if (!agencia) {
+            sinAgencia += 1;
+            return;
+          }
+
           if (disponible) disp++;
           else used++;
 
-          const agencia = String(data.agencia || "").trim() || "Sin agencia";
           const current = byAgency.get(agencia) || { disponibles: 0, usadas: 0, total: 0 };
           if (disponible) {
             current.disponibles += 1;
@@ -94,12 +148,23 @@ export default function Dashboard({ user }) {
         setUsadas(used);
         setTotal(disp + used);
         setEstadoPorAgencia(agrupado);
+        setEsimsSinAgencia(sinAgencia);
       },
       () => {
+        settled = true;
+        clearTimeout(timeoutId);
         setError("No se pudieron cargar las metricas de eSIMs.");
+        setDisponibles(0);
+        setUsadas(0);
+        setTotal(0);
+        setEstadoPorAgencia([]);
+        setEsimsSinAgencia(0);
       }
     );
-    return () => unsub();
+    return () => {
+      clearTimeout(timeoutId);
+      unsub();
+    };
   }, [canSeeAll, agenciaUsuario]);
 
   const metricasVisibles = useMemo(() => {
@@ -135,7 +200,9 @@ export default function Dashboard({ user }) {
   useEffect(() => {
     if (!mostrarDetalleDisponibles) return;
 
-    if (!canSeeAll && !agenciaUsuario) {
+    const agenciaUsuarioNormalizada = normalizeAgency(agenciaUsuario);
+
+    if (!canSeeAll && !agenciaUsuarioNormalizada) {
       setDetalleDisponibles([]);
       setErrorDetalleDisponibles("No tienes agencia asignada para consultar eSIMs disponibles.");
       setCargandoDetalleDisponibles(false);
@@ -144,6 +211,16 @@ export default function Dashboard({ user }) {
 
     setCargandoDetalleDisponibles(true);
     setErrorDetalleDisponibles("");
+    setDetalleDisponibles([]);
+
+    let settled = false;
+    const timeoutId = setTimeout(() => {
+      if (!settled) {
+        setCargandoDetalleDisponibles(false);
+        setDetalleDisponibles([]);
+        setErrorDetalleDisponibles("La consulta de eSIMs disponibles esta tardando mas de lo esperado. Intenta recargar.");
+      }
+    }, 12000);
 
     const constraints = [where("estado", "==", "disponible")];
     if (agenciaFiltroDisponibles) {
@@ -155,31 +232,44 @@ export default function Dashboard({ user }) {
     const unsub = onSnapshot(
       source,
       (snapshot) => {
-        const rows = snapshot.docs.map((docu) => {
-          const data = docu.data();
-          const serie = String(data.serie || "").trim();
-          const codigoBarras = String(data.codigoBarras || data.barcode || serie).trim();
+        settled = true;
+        clearTimeout(timeoutId);
+        const rows = snapshot.docs
+          .map((docu) => {
+            const data = docu.data();
+            const agencia = normalizeAgency(data.agencia);
+            if (!agencia) return null;
 
-          return {
-            id: docu.id,
-            serie,
-            codigoBarras,
-            agencia: String(data.agencia || "").trim() || "Sin agencia",
-            loteId: String(data.loteId || "").trim(),
-            fechaCarga: data.fechaCarga || "",
-          };
-        });
+            const serie = String(data.serie || "").trim();
+            const codigoBarras = String(data.codigoBarras || data.barcode || serie).trim();
+
+            return {
+              id: docu.id,
+              serie,
+              codigoBarras,
+              agencia,
+              loteId: String(data.loteId || "").trim(),
+              fechaCarga: data.fechaCarga || "",
+            };
+          })
+          .filter(Boolean);
 
         setDetalleDisponibles(rows);
         setCargandoDetalleDisponibles(false);
       },
       () => {
+        settled = true;
+        clearTimeout(timeoutId);
         setErrorDetalleDisponibles("No se pudo cargar el detalle de eSIMs disponibles.");
+        setDetalleDisponibles([]);
         setCargandoDetalleDisponibles(false);
       }
     );
 
-    return () => unsub();
+    return () => {
+      clearTimeout(timeoutId);
+      unsub();
+    };
   }, [mostrarDetalleDisponibles, canSeeAll, agenciaUsuario, agenciaFiltroDisponibles]);
 
   const detalleDisponiblesFiltrado = useMemo(() => {
@@ -210,14 +300,20 @@ export default function Dashboard({ user }) {
       source,
       (snapshot) => {
         const counts = {};
+        const rows = [];
         snapshot.forEach(doc => {
           const data = doc.data();
           const email = data.usuario;
           if (email) {
             counts[email] = (counts[email] || 0) + 1;
           }
+          rows.push({
+            fecha: data.fecha || "",
+            agencia: normalizeAgency(data.agencia),
+          });
         });
         setSolicitudesPorEjecutivo(counts);
+        setSolicitudesActividad(rows);
       },
       () => {
         setError("No se pudieron cargar las solicitudes del equipo.");
@@ -240,13 +336,19 @@ export default function Dashboard({ user }) {
       source,
       (snapshot) => {
         let totalDevoluciones = 0;
+        const rows = [];
         snapshot.forEach((doc) => {
           const data = doc.data();
           if (canSeeAll || sameAgency(data.agencia, agenciaUsuario)) {
             totalDevoluciones += 1;
           }
+          rows.push({
+            fecha: data.fecha || "",
+            agencia: normalizeAgency(data.agencia),
+          });
         });
         setDevoluciones(totalDevoluciones);
+        setDevolucionesActividad(rows);
       },
       () => {
         setError("No se pudieron cargar las devoluciones.");
@@ -261,6 +363,107 @@ export default function Dashboard({ user }) {
   const agenciaActiva = canSeeAll
     ? estadoPorAgencia.find((row) => row.agencia === agenciaGraficaSeleccionada) || null
     : null;
+  const requestEntries = useMemo(() => {
+    return Object.entries(solicitudesPorEjecutivo)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 10);
+  }, [solicitudesPorEjecutivo]);
+  const maxRequestCount = requestEntries[0]?.[1] || 1;
+  const returnSignals = useMemo(() => buildSignalVectors(devoluciones, "returns"), [devoluciones]);
+  const agencyPulseData = useMemo(() => {
+    const timeline = new Map();
+    const targetAgency = normalizeAgency(canSeeAll ? agenciaGraficaSeleccionada : agenciaUsuario);
+    if (!targetAgency) return [];
+
+    solicitudesActividad.forEach((item) => {
+      if (!sameAgency(item.agencia, targetAgency)) return;
+      const date = normalizeDateValue(item.fecha);
+      if (!date) return;
+      const key = date.toISOString().slice(0, 10);
+      const current = timeline.get(key) || { solicitudes: 0, devoluciones: 0 };
+      current.solicitudes += 1;
+      timeline.set(key, current);
+    });
+
+    devolucionesActividad.forEach((item) => {
+      if (!sameAgency(item.agencia, targetAgency)) return;
+      const date = normalizeDateValue(item.fecha);
+      if (!date) return;
+      const key = date.toISOString().slice(0, 10);
+      const current = timeline.get(key) || { solicitudes: 0, devoluciones: 0 };
+      current.devoluciones += 1;
+      timeline.set(key, current);
+    });
+
+    return Array.from(timeline.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .slice(-7)
+      .map(([key, values]) => ({
+        dia: new Date(`${key}T00:00:00`).toLocaleDateString("es-CR", { month: "2-digit", day: "2-digit" }),
+        actividad: values.solicitudes + values.devoluciones,
+        solicitudes: values.solicitudes,
+        devoluciones: values.devoluciones,
+      }));
+  }, [canSeeAll, agenciaGraficaSeleccionada, agenciaUsuario, solicitudesActividad, devolucionesActividad]);
+  const observationCards = useMemo(() => {
+    if (estadoPorAgencia.length === 0) return [];
+
+    const solicitudesPorAgencia = new Map();
+    solicitudesActividad.forEach((item) => {
+      if (!item.agencia) return;
+      solicitudesPorAgencia.set(item.agencia, (solicitudesPorAgencia.get(item.agencia) || 0) + 1);
+    });
+
+    const devolucionesPorAgencia = new Map();
+    devolucionesActividad.forEach((item) => {
+      if (!item.agencia) return;
+      devolucionesPorAgencia.set(item.agencia, (devolucionesPorAgencia.get(item.agencia) || 0) + 1);
+    });
+
+    const mayorActividad = [...estadoPorAgencia].sort((a, b) => {
+      const actividadA = (solicitudesPorAgencia.get(a.agencia) || 0) + (devolucionesPorAgencia.get(a.agencia) || 0);
+      const actividadB = (solicitudesPorAgencia.get(b.agencia) || 0) + (devolucionesPorAgencia.get(b.agencia) || 0);
+      return actividadB - actividadA;
+    })[0];
+
+    const mayorRetorno = [...estadoPorAgencia].sort(
+      (a, b) => (devolucionesPorAgencia.get(b.agencia) || 0) - (devolucionesPorAgencia.get(a.agencia) || 0)
+    )[0];
+
+    const inventarioCritico = [...estadoPorAgencia].sort((a, b) => a.disponibles - b.disponibles)[0];
+    const mayorUso = [...estadoPorAgencia].sort((a, b) => {
+      const usoA = a.total === 0 ? 0 : a.usadas / a.total;
+      const usoB = b.total === 0 ? 0 : b.usadas / b.total;
+      return usoB - usoA;
+    })[0];
+
+    return [
+      {
+        label: "Mayor actividad",
+        agency: mayorActividad?.agencia || "-",
+        value: `${(solicitudesPorAgencia.get(mayorActividad?.agencia) || 0) + (devolucionesPorAgencia.get(mayorActividad?.agencia) || 0)} eventos`,
+        tone: "cyan",
+      },
+      {
+        label: "Retorno mas alto",
+        agency: mayorRetorno?.agencia || "-",
+        value: `${devolucionesPorAgencia.get(mayorRetorno?.agencia) || 0} devoluciones`,
+        tone: "violet",
+      },
+      {
+        label: "Inventario critico",
+        agency: inventarioCritico?.agencia || "-",
+        value: `${inventarioCritico?.disponibles ?? 0} disponibles`,
+        tone: "amber",
+      },
+      {
+        label: "Mayor uso",
+        agency: mayorUso?.agencia || "-",
+        value: `${mayorUso?.total ? Math.round((mayorUso.usadas / mayorUso.total) * 100) : 0}% ocupacion`,
+        tone: "red",
+      },
+    ];
+  }, [estadoPorAgencia, solicitudesActividad, devolucionesActividad]);
 
   return (
     <div style={{ width: "100%", maxWidth: 1240, margin: "0 auto" }}>
@@ -278,6 +481,11 @@ export default function Dashboard({ user }) {
       {canSeeAll && agenciaActiva && (
         <p style={{ marginTop: -8, marginBottom: 16, color: "#c6f9f0", fontWeight: 700 }}>
           Mostrando metricas de agencia: {agenciaActiva.agencia}
+        </p>
+      )}
+      {canSeeAll && esimsSinAgencia > 0 && (
+        <p style={{ marginTop: -8, marginBottom: 16, color: "#ffd58c", fontWeight: 700 }}>
+          Aviso: se detectaron {esimsSinAgencia} eSIMs sin agencia y se excluyeron del consolidado.
         </p>
       )}
 
@@ -459,6 +667,62 @@ export default function Dashboard({ user }) {
                       Disponibles: {agenciaActiva.disponibles} | Usadas: {agenciaActiva.usadas} | Total: {agenciaActiva.total}
                     </div>
                     <EsimPieChart disponibles={agenciaActiva.disponibles} usadas={agenciaActiva.usadas} />
+                    <div className="agency-pulse-panel">
+                      <div className="agency-pulse-panel__head">
+                        <strong>Pulso de actividad</strong>
+                        <span>Ultimos 7 dias</span>
+                      </div>
+                      {agencyPulseData.length === 0 ? (
+                        <div className="agency-pulse-panel__empty">Sin actividad reciente detectada</div>
+                      ) : (
+                        <div className="agency-pulse-chart">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={agencyPulseData} margin={{ top: 8, right: 6, left: -18, bottom: 0 }}>
+                              <defs>
+                                <linearGradient id="agencyPulseFill" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="0%" stopColor="#ffe066" stopOpacity={0.52} />
+                                  <stop offset="100%" stopColor="#ffe066" stopOpacity={0.04} />
+                                </linearGradient>
+                              </defs>
+                              <CartesianGrid stroke="rgba(255, 224, 102, 0.08)" vertical={false} />
+                              <XAxis dataKey="dia" tick={{ fill: "#f9ebb0", fontSize: 11 }} axisLine={false} tickLine={false} />
+                              <YAxis allowDecimals={false} tick={{ fill: "#c9c39d", fontSize: 11 }} axisLine={false} tickLine={false} width={28} />
+                              <Tooltip
+                                formatter={(value, name) => [
+                                  `${value}`,
+                                  name === "actividad" ? "Actividad" : name === "solicitudes" ? "Solicitudes" : "Devoluciones",
+                                ]}
+                                contentStyle={{
+                                  background: "#15120a",
+                                  border: "1px solid rgba(255, 224, 102, 0.26)",
+                                  borderRadius: 10,
+                                  color: "#fff6cc",
+                                }}
+                              />
+                              <Area type="monotone" dataKey="actividad" stroke="#ffe066" fill="url(#agencyPulseFill)" strokeWidth={2.4} />
+                            </AreaChart>
+                          </ResponsiveContainer>
+                        </div>
+                      )}
+                    </div>
+                    {canSeeAll && observationCards.length > 0 && (
+                      <div className="observation-grid">
+                        <div className="observation-grid__title">Canales en observacion</div>
+                        <div className="observation-grid__cards">
+                          {observationCards.map((card, index) => (
+                            <article
+                              key={card.label}
+                              className={`observation-card is-${card.tone}`}
+                              style={{ "--delay": `${index * 0.16}s` }}
+                            >
+                              <span className="observation-card__label">{card.label}</span>
+                              <strong className="observation-card__agency">{card.agency}</strong>
+                              <span className="observation-card__value">{card.value}</span>
+                            </article>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div style={{ width: "100%", height: 180, display: "flex", alignItems: "center", justifyContent: "center", color: "#00fff7" }}>
@@ -468,36 +732,111 @@ export default function Dashboard({ user }) {
               </div>
             )
           ) : (
-            <EsimPieChart disponibles={metricasVisibles.disponibles} usadas={metricasVisibles.usadas} />
+            <div>
+              <EsimPieChart disponibles={metricasVisibles.disponibles} usadas={metricasVisibles.usadas} />
+              <div className="agency-pulse-panel">
+                <div className="agency-pulse-panel__head">
+                  <strong>Pulso de actividad</strong>
+                  <span>Ultimos 7 dias</span>
+                </div>
+                {agencyPulseData.length === 0 ? (
+                  <div className="agency-pulse-panel__empty">Sin actividad reciente detectada</div>
+                ) : (
+                  <div className="agency-pulse-chart">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={agencyPulseData} margin={{ top: 8, right: 6, left: -18, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="agencyPulseFillUser" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#ffe066" stopOpacity={0.52} />
+                            <stop offset="100%" stopColor="#ffe066" stopOpacity={0.04} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid stroke="rgba(255, 224, 102, 0.08)" vertical={false} />
+                        <XAxis dataKey="dia" tick={{ fill: "#f9ebb0", fontSize: 11 }} axisLine={false} tickLine={false} />
+                        <YAxis allowDecimals={false} tick={{ fill: "#c9c39d", fontSize: 11 }} axisLine={false} tickLine={false} width={28} />
+                        <Tooltip
+                          formatter={(value, name) => [
+                            `${value}`,
+                            name === "actividad" ? "Actividad" : name === "solicitudes" ? "Solicitudes" : "Devoluciones",
+                          ]}
+                          contentStyle={{
+                            background: "#15120a",
+                            border: "1px solid rgba(255, 224, 102, 0.26)",
+                            borderRadius: 10,
+                            color: "#fff6cc",
+                          }}
+                        />
+                        <Area type="monotone" dataKey="actividad" stroke="#ffe066" fill="url(#agencyPulseFillUser)" strokeWidth={2.4} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </div>
+            </div>
           )}
         </div>
 
-        <div style={{ background: "#181818", borderRadius: 16, padding: 18, boxShadow: "0 0 16px 2px #bd34fecc", minHeight: 320 }}>
-          <h3 style={{ fontSize: 18, marginBottom: 16, color: "#bd34fe", textShadow: "0 1px 8px #bd34fecc" }}>Solicitudes por ejecutivo</h3>
-          {Object.keys(solicitudesPorEjecutivo).length === 0 ? (
-            <svg width="100%" height="180">
-              <text x="50%" y="90" textAnchor="middle" fontSize="18" fill="#bd34fe" style={{ textShadow: "0 1px 8px #bd34fecc" }}>Sin datos</text>
-            </svg>
-          ) : (
-            <div style={{ width: "100%", overflowX: "auto" }}>
-              <table style={{ width: "100%", color: "#bd34fe", background: "transparent", borderCollapse: "collapse", marginTop: 8, minWidth: 360 }}>
-                <thead>
-                  <tr style={{ color: "#fff", background: "#bd34fe22" }}>
-                    <th style={{ textAlign: "left", padding: "8px" }}>Email</th>
-                    <th style={{ textAlign: "right", padding: "8px" }}>Solicitudes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(solicitudesPorEjecutivo).map(([email, count]) => (
-                    <tr key={email}>
-                      <td style={{ padding: "8px", borderBottom: "1px solid #bd34fe44" }}>{email}</td>
-                      <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid #bd34fe44" }}>{count}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        <div className="ops-panel ops-panel--violet" style={{ borderRadius: 16, padding: 18, minHeight: 320 }}>
+          <div className="ops-panel__content">
+            <h3 style={{ fontSize: 18, marginBottom: 16, color: "#bd34fe", textShadow: "0 1px 8px #bd34fecc" }}>Solicitudes por ejecutivo</h3>
+
+            <div style={{ display: "grid", gap: 16 }}>
+              <div className="returns-chamber" aria-hidden="true">
+                <div className="returns-chamber__ring returns-chamber__ring--1" />
+                <div className="returns-chamber__ring returns-chamber__ring--2" />
+                <div className="returns-chamber__ring returns-chamber__ring--3" />
+                <div className="returns-chamber__core" />
+                {returnSignals.map((signal) => (
+                  <span
+                    key={signal.id}
+                    className={`returns-chamber__trace ${signal.dim ? "is-dim" : ""}`}
+                    style={{
+                      "--start-x": `${signal.x}%`,
+                      "--start-y": `${signal.y}%`,
+                      "--trace-angle": signal.angle,
+                      "--trace-length": signal.length,
+                      "--delay": signal.delay,
+                    }}
+                  />
+                ))}
+                <div className="returns-chamber__overlay">
+                  <span>Recovery Channel</span>
+                  <span>{devoluciones} eSIMs devueltas</span>
+                  <span>Retorno estable</span>
+                </div>
+              </div>
+
+              {requestEntries.length === 0 ? (
+                <div className="signal-matrix__empty">Sin actividad para escanear</div>
+              ) : (
+                <div className="signal-matrix">
+                  {requestEntries.map(([email, count], index) => {
+                    const alias = String(email || "sin-correo").split("@")[0];
+                    const strength = `${Math.max(22, Math.round((count / maxRequestCount) * 100))}%`;
+
+                    return (
+                      <div
+                        key={email}
+                        className="signal-matrix__row"
+                        style={{ "--strength": strength, "--delay": `${index * 0.18}s` }}
+                      >
+                        <div className="signal-matrix__meta">
+                          <div className="signal-matrix__email">
+                            <strong>{email}</strong>
+                            <span>Canal {alias.toUpperCase()}</span>
+                          </div>
+                          <div className="signal-matrix__count">{count}</div>
+                        </div>
+                        <div className="signal-matrix__bar">
+                          <div className="signal-matrix__bar-fill" />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
       </div>
     </div>

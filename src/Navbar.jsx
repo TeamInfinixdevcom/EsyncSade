@@ -33,6 +33,16 @@ export default function Navbar({ onLogout, user, onSelect }) {
     textShadow: "0 1px 8px #fff",
   };
 
+  const featuredButton = {
+    ...baseButton,
+    position: "relative",
+    overflow: "hidden",
+    border: "2px solid #7af9ff",
+    color: "#eaffff",
+    boxShadow: "0 0 18px rgba(0, 255, 247, 0.32), 0 0 34px rgba(122, 249, 255, 0.12)",
+    animation: "nav-feature-glow 2.8s ease-in-out infinite",
+  };
+
   return (
     <nav style={styles.nav}>
       {/* Logo y Usuario */}
@@ -52,8 +62,20 @@ export default function Navbar({ onLogout, user, onSelect }) {
           <button
             key={item}
             onClick={() => onSelect(item)}
-            style={item === "Solicitar eSIM" ? primaryButton : baseButton}
+            style={
+              item === "Solicitar eSIM"
+                ? primaryButton
+                : item === "Mis Solicitudes"
+                ? featuredButton
+                : baseButton
+            }
           >
+            {item === "Mis Solicitudes" && (
+              <>
+                <span style={styles.featureSweep} aria-hidden="true" />
+                <span style={styles.featureBeacon} aria-hidden="true" />
+              </>
+            )}
             {item}
           </button>
         ))}
@@ -119,6 +141,26 @@ const styles = {
     display: "flex",
     gap: 12,
   },
+  featureSweep: {
+    position: "absolute",
+    inset: 0,
+    background: "linear-gradient(90deg, transparent, rgba(122, 249, 255, 0.26), transparent)",
+    transform: "translateX(-130%)",
+    animation: "nav-feature-sweep 4.8s linear infinite",
+    pointerEvents: "none",
+  },
+  featureBeacon: {
+    position: "absolute",
+    top: 7,
+    right: 10,
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    background: "#8ffcff",
+    boxShadow: "0 0 10px rgba(143, 252, 255, 0.92)",
+    animation: "nav-feature-beacon 1.3s ease-in-out infinite",
+    pointerEvents: "none",
+  },
   logout: {
     background: "#ff3c2f",
     color: "#fff",
@@ -132,6 +174,3 @@ const styles = {
     letterSpacing: 1,
   },
 };
-// El Navbar está correcto y funcional.
-// No se requieren cambios en la lógica ni en los estilos.
-// Si necesitas ajustes específicos, por favor indícalos.

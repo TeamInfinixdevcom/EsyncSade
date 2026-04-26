@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { collection, query, where, getDocs } from "firebase/firestore";
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { db } from "./firebase";
 import { auth } from "./firebase";
+import EsimPieChart from "./EsimPieChart";
 import "./user-report.css";
 
 const PAGE_SIZE = 10;
@@ -26,6 +28,38 @@ function matchesFilter(values, queryText) {
     if (!compactQuery) return false;
     return compactSearch(value).includes(compactQuery);
   });
+}
+
+function formatDateTimeWithSeconds(value) {
+  if (!value) return "-";
+
+  const raw = typeof value?.toDate === "function" ? value.toDate() : value;
+  const date = raw instanceof Date ? raw : new Date(raw);
+
+  if (Number.isNaN(date.getTime())) return "-";
+
+  return date.toLocaleString("es-CR", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+function normalizeDateValue(value) {
+  if (!value) return null;
+  const raw = typeof value?.toDate === "function" ? value.toDate() : value;
+  const date = raw instanceof Date ? raw : new Date(raw);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getTipoGestionKey(solicitud) {
+  if (solicitud?.tipoGestion === "cambio_sim_komercial") return "cambio";
+  if (solicitud?.tipoGestion === "plan_nuevo_komercial") return "plan";
+  return "solicitud";
 }
 
 export default function UserReport() {
@@ -79,7 +113,7 @@ export default function UserReport() {
 
         setSolicitudes(solicitudesData);
         setDevoluciones(devolucionesData);
-      } catch (err) {
+      } catch {
         setError("No se pudo cargar tu historial.");
       }
       setLoading(false);
@@ -106,39 +140,96 @@ export default function UserReport() {
     );
   }, [devoluciones, filtroHistorial]);
 
-  useEffect(() => {
-    setPaginaSolicitudes(1);
-    setPaginaDevoluciones(1);
-  }, [filtroHistorial, userEmail]);
-
   const totalPaginasSolicitudes = Math.max(1, Math.ceil(solicitudesFiltradas.length / PAGE_SIZE));
   const totalPaginasDevoluciones = Math.max(1, Math.ceil(devolucionesFiltradas.length / PAGE_SIZE));
 
-  useEffect(() => {
-    if (paginaSolicitudes > totalPaginasSolicitudes) {
-      setPaginaSolicitudes(totalPaginasSolicitudes);
-    }
-    if (paginaDevoluciones > totalPaginasDevoluciones) {
-      setPaginaDevoluciones(totalPaginasDevoluciones);
-    }
-  }, [
-    paginaSolicitudes,
-    paginaDevoluciones,
-    totalPaginasSolicitudes,
-    totalPaginasDevoluciones,
-  ]);
+  const paginaSolicitudesActual = Math.min(paginaSolicitudes, totalPaginasSolicitudes);
+  const paginaDevolucionesActual = Math.min(paginaDevoluciones, totalPaginasDevoluciones);
 
   const solicitudesPagina = solicitudesFiltradas.slice(
-    (paginaSolicitudes - 1) * PAGE_SIZE,
-    paginaSolicitudes * PAGE_SIZE
+    (paginaSolicitudesActual - 1) * PAGE_SIZE,
+    paginaSolicitudesActual * PAGE_SIZE
   );
 
   const devolucionesPagina = devolucionesFiltradas.slice(
-    (paginaDevoluciones - 1) * PAGE_SIZE,
-    paginaDevoluciones * PAGE_SIZE
+    (paginaDevolucionesActual - 1) * PAGE_SIZE,
+    paginaDevolucionesActual * PAGE_SIZE
   );
 
   const filtroActivo = normalizeSearch(filtroHistorial) !== "";
+
+  const handleFiltroChange = (event) => {
+    setFiltroHistorial(event.target.value);
+    setPaginaSolicitudes(1);
+    setPaginaDevoluciones(1);
+  };
+
+  const actividadMetricas = useMemo(() => {
+    const timeline = new Map();
+
+    solicitudes.forEach((item) => {
+      const date = normalizeDateValue(item.fecha);
+      if (!date) return;
+      const key = date.toISOString().slice(0, 10);
+      const current = timeline.get(key) || { solicitudes: 0, devoluciones: 0 };
+      current.solicitudes += 1;
+      timeline.set(key, current);
+    });
+
+    devoluciones.forEach((item) => {
+      const date = normalizeDateValue(item.fecha);
+      if (!date) return;
+      const key = date.toISOString().slice(0, 10);
+      const current = timeline.get(key) || { solicitudes: 0, devoluciones: 0 };
+      current.devoluciones += 1;
+      timeline.set(key, current);
+    });
+
+    const rows = Array.from(timeline.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .slice(-7)
+      .map(([key, values]) => ({
+        fecha: key,
+        dia: new Date(`${key}T00:00:00`).toLocaleDateString("es-CR", { month: "2-digit", day: "2-digit" }),
+        solicitudes: values.solicitudes,
+        devoluciones: values.devoluciones,
+        actividad: values.solicitudes + values.devoluciones,
+      }));
+
+    const actividadTotal = rows.reduce((acc, row) => acc + row.actividad, 0);
+    const devolucionesTotales = devoluciones.length;
+    const solicitudesTotales = solicitudes.length;
+    const balanceActivo = Math.max(0, solicitudesTotales - devolucionesTotales);
+
+    return {
+      timeline: rows,
+      solicitudesTotales,
+      devolucionesTotales,
+      balanceActivo,
+      actividadPromedio: rows.length ? (actividadTotal / rows.length).toFixed(1) : "0.0",
+    };
+  }, [solicitudes, devoluciones]);
+
+  const tipoGestionMetricas = useMemo(() => {
+    const buckets = {
+      solicitud: { label: "Solicitud", count: 0, color: "cyan" },
+      cambio: { label: "Cambio SIM", count: 0, color: "violet" },
+      plan: { label: "Plan nuevo", count: 0, color: "amber" },
+    };
+
+    solicitudes.forEach((item) => {
+      const key = getTipoGestionKey(item);
+      buckets[key].count += 1;
+    });
+
+    const rows = Object.values(buckets);
+    const max = Math.max(1, ...rows.map((row) => row.count));
+
+    return rows.map((row) => ({
+      ...row,
+      pulseCount: Math.max(3, Math.min(10, Math.round((row.count / max) * 10))),
+    }));
+  }, [solicitudes]);
 
   return (
     <section className="history-shell">
@@ -177,10 +268,118 @@ export default function UserReport() {
                   className="history-filter-input"
                   type="text"
                   value={filtroHistorial}
-                  onChange={(e) => setFiltroHistorial(e.target.value)}
+                  onChange={handleFiltroChange}
                   placeholder="Ejemplo: KO-50733578 o 1-16488468244"
                 />
               </div>
+
+              <section className="history-ops-grid">
+                <article className="history-ops-panel history-ops-panel--cyan">
+                  <div className="history-ops-head">
+                    <div>
+                      <p className="history-ops-kicker">Monarch personal feed</p>
+                      <h3 className="history-ops-title">Radar de actividad</h3>
+                    </div>
+                    <div className="history-ops-pill">
+                      {userEmail ? userEmail.split("@")[0].toUpperCase() : "USER"}
+                    </div>
+                  </div>
+
+                  <div className="history-ops-radar">
+                    <div className="history-ops-radar-copy">
+                      <span>Solicitudes {actividadMetricas.solicitudesTotales}</span>
+                      <span>Devoluciones {actividadMetricas.devolucionesTotales}</span>
+                      <span>Balance {actividadMetricas.balanceActivo}</span>
+                    </div>
+                    <EsimPieChart
+                      disponibles={actividadMetricas.solicitudesTotales}
+                      usadas={actividadMetricas.devolucionesTotales}
+                    />
+                  </div>
+                </article>
+
+                <article className="history-ops-panel history-ops-panel--violet">
+                  <div className="history-ops-head">
+                    <div>
+                      <p className="history-ops-kicker">Signal behavior</p>
+                      <h3 className="history-ops-title">Comportamiento reciente</h3>
+                    </div>
+                    <div className="history-ops-pill history-ops-pill--violet">
+                      AVG {actividadMetricas.actividadPromedio}
+                    </div>
+                  </div>
+
+                  {actividadMetricas.timeline.length === 0 ? (
+                    <div className="history-ops-empty">Aun no hay trazas para graficar</div>
+                  ) : (
+                    <div className="history-ops-chart">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={actividadMetricas.timeline} margin={{ top: 10, right: 8, left: -16, bottom: 0 }}>
+                          <defs>
+                            <linearGradient id="historyReqFill" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#00fff7" stopOpacity={0.44} />
+                              <stop offset="100%" stopColor="#00fff7" stopOpacity={0.02} />
+                            </linearGradient>
+                            <linearGradient id="historyRetFill" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#bd34fe" stopOpacity={0.42} />
+                              <stop offset="100%" stopColor="#bd34fe" stopOpacity={0.02} />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid stroke="rgba(134, 182, 217, 0.12)" vertical={false} />
+                          <XAxis dataKey="dia" tick={{ fill: "#cfe9ff", fontSize: 11 }} axisLine={false} tickLine={false} />
+                          <YAxis allowDecimals={false} tick={{ fill: "#9bc5e8", fontSize: 11 }} axisLine={false} tickLine={false} width={28} />
+                          <Tooltip
+                            contentStyle={{
+                              background: "#091317",
+                              border: "1px solid rgba(0, 255, 247, 0.25)",
+                              borderRadius: 10,
+                              color: "#ebfbff",
+                            }}
+                          />
+                          <Area type="monotone" dataKey="solicitudes" stroke="#00fff7" fill="url(#historyReqFill)" strokeWidth={2.2} />
+                          <Area type="monotone" dataKey="devoluciones" stroke="#bd34fe" fill="url(#historyRetFill)" strokeWidth={2.2} />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </article>
+
+                <article className="history-ops-panel history-ops-panel--amber">
+                  <div className="history-ops-head">
+                    <div>
+                      <p className="history-ops-kicker">Behavior signature</p>
+                      <h3 className="history-ops-title">Tipos de gestion</h3>
+                    </div>
+                    <div className="history-ops-pill history-ops-pill--amber">
+                      {solicitudes.length} total
+                    </div>
+                  </div>
+
+                  <div className="history-type-matrix">
+                    {tipoGestionMetricas.map((row, index) => (
+                      <div
+                        key={row.label}
+                        className={`history-type-row is-${row.color}`}
+                        style={{ "--strength": row.strength, "--delay": `${index * 0.16}s` }}
+                      >
+                        <div className="history-type-row__meta">
+                          <strong>{row.label}</strong>
+                          <span>{row.count} registros</span>
+                        </div>
+                        <div className="history-type-row__pulseband">
+                          {Array.from({ length: row.pulseCount }, (_, pulseIndex) => (
+                            <span
+                              key={`${row.label}-${pulseIndex}`}
+                              className="history-type-row__pulse"
+                              style={{ "--pulse-delay": `${pulseIndex * 0.12}s` }}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+              </section>
 
               <div className="history-grid">
                 <section className="history-panel">
@@ -221,7 +420,7 @@ export default function UserReport() {
                                 <td>{s.pedido || (s.pedidoPendiente ? "Pendiente por sistema" : "-")}</td>
                                 <td>{s.numero || s.numeroCliente || "-"}</td>
                                 <td>{s.cedula || s.identificacion || "-"}</td>
-                                <td>{s.fecha ? new Date(s.fecha).toLocaleString() : "-"}</td>
+                                <td>{formatDateTimeWithSeconds(s.fecha)}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -231,18 +430,22 @@ export default function UserReport() {
                       <div className="history-pagination">
                         <button
                           type="button"
-                          onClick={() => setPaginaSolicitudes((prev) => Math.max(1, prev - 1))}
-                          disabled={paginaSolicitudes === 1}
+                          onClick={() =>
+                            setPaginaSolicitudes((prev) => Math.max(1, Math.min(prev, totalPaginasSolicitudes) - 1))
+                          }
+                          disabled={paginaSolicitudesActual === 1}
                         >
                           Anterior
                         </button>
-                        <span>Pagina {paginaSolicitudes} de {totalPaginasSolicitudes}</span>
+                        <span>Pagina {paginaSolicitudesActual} de {totalPaginasSolicitudes}</span>
                         <button
                           type="button"
                           onClick={() =>
-                            setPaginaSolicitudes((prev) => Math.min(totalPaginasSolicitudes, prev + 1))
+                            setPaginaSolicitudes((prev) =>
+                              Math.min(totalPaginasSolicitudes, Math.min(prev, totalPaginasSolicitudes) + 1)
+                            )
                           }
-                          disabled={paginaSolicitudes === totalPaginasSolicitudes}
+                          disabled={paginaSolicitudesActual === totalPaginasSolicitudes}
                         >
                           Siguiente
                         </button>
@@ -287,7 +490,7 @@ export default function UserReport() {
                                 <td>{d.pedido || "-"}</td>
                                 <td>{d.numero || d.numeroCliente || "-"}</td>
                                 <td>{d.cedula || d.identificacion || "-"}</td>
-                                <td>{d.fecha ? new Date(d.fecha).toLocaleString() : "-"}</td>
+                                <td>{formatDateTimeWithSeconds(d.fecha)}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -297,18 +500,22 @@ export default function UserReport() {
                       <div className="history-pagination history-pagination--ret">
                         <button
                           type="button"
-                          onClick={() => setPaginaDevoluciones((prev) => Math.max(1, prev - 1))}
-                          disabled={paginaDevoluciones === 1}
+                          onClick={() =>
+                            setPaginaDevoluciones((prev) => Math.max(1, Math.min(prev, totalPaginasDevoluciones) - 1))
+                          }
+                          disabled={paginaDevolucionesActual === 1}
                         >
                           Anterior
                         </button>
-                        <span>Pagina {paginaDevoluciones} de {totalPaginasDevoluciones}</span>
+                        <span>Pagina {paginaDevolucionesActual} de {totalPaginasDevoluciones}</span>
                         <button
                           type="button"
                           onClick={() =>
-                            setPaginaDevoluciones((prev) => Math.min(totalPaginasDevoluciones, prev + 1))
+                            setPaginaDevoluciones((prev) =>
+                              Math.min(totalPaginasDevoluciones, Math.min(prev, totalPaginasDevoluciones) + 1)
+                            )
                           }
-                          disabled={paginaDevoluciones === totalPaginasDevoluciones}
+                          disabled={paginaDevolucionesActual === totalPaginasDevoluciones}
                         >
                           Siguiente
                         </button>
