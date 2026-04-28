@@ -54,6 +54,12 @@ export default function DevolucionEsims({ user }) {
       const esimData = esimDoc.data();
       const agenciaEsim = esimData.agencia || agenciaUsuario;
 
+      if (!agenciaEsim) {
+        setMensaje("Error: No se puede determinar la agencia para esta eSIM. Contacta al administrador.");
+        setLoading(false);
+        return;
+      }
+
       if (esimData.agencia && !sameAgency(esimData.agencia, agenciaUsuario)) {
         setMensaje("Esa eSIM pertenece a otra agencia y no puedes devolverla desde tu perfil.");
         setLoading(false);
