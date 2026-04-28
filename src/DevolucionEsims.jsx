@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { addDoc, collection, getDocs, query, updateDoc, where } from "firebase/firestore";
 import { auth, db } from "./firebase";
-import { getUserAgency, sameAgency } from "./userProfile";
+import { getUserAgency, sameAgency, normalizeAgency } from "./userProfile";
 import "./forms.css";
 
 export default function DevolucionEsims({ user }) {
@@ -74,33 +74,51 @@ export default function DevolucionEsims({ user }) {
 
       const fecha = new Date().toISOString();
 
-      await updateDoc(esimDoc.ref, {
-        estado: "disponible",
-        fechaDevolucion: fecha,
-        usuarioDevolucion: usuario,
-        agencia: agenciaEsim,
-        pedido: null,
-        numero: null,
-        cedula: null,
-        fechaUso: null,
-      });
+      // Normalizar agencia para garantizar consistencia con Firestore rules
+      const agenciaNormalizada = normalizeAgency(agenciaEsim);
 
-      await addDoc(collection(db, "devoluciones"), {
-        serie: esimData.serie || serie,
-        usuario,
-        fecha,
-        pedido: esimData.pedido || "",
-        numero: esimData.numero || "",
-        cedula: esimData.cedula || "",
-        agencia: agenciaEsim,
-        loteId: esimData.loteId || null,
-        esimId: esimDoc.id,
-      });
+      try {
+        await updateDoc(esimDoc.ref, {
+          estado: "disponible",
+          fechaDevolucion: fecha,
+          usuarioDevolucion: usuario,
+          agencia: agenciaNormalizada,
+          pedido: null,
+          numero: null,
+          cedula: null,
+          fechaUso: null,
+        });
+      } catch (updateErr) {
+        console.error("ERROR UPDATE ESIM:", updateErr);
+        setMensaje(`Error: Fallo al actualizar eSIM. ${updateErr.message}`);
+        setLoading(false);
+        return;
+      }
+
+      try {
+        await addDoc(collection(db, "devoluciones"), {
+          serie: esimData.serie || serie,
+          usuario,
+          fecha,
+          pedido: esimData.pedido || "",
+          numero: esimData.numero || "",
+          cedula: esimData.cedula || "",
+          agencia: agenciaNormalizada,
+          loteId: esimData.loteId || null,
+          esimId: esimDoc.id,
+        });
+      } catch (devErr) {
+        console.error("ERROR DEVOLUCIONES:", devErr);
+        setMensaje(`Error: Fallo al registrar devolución. ${devErr.message}`);
+        setLoading(false);
+        return;
+      }
 
       setMensaje(`Serie ${serie} devuelta y registrada en tu historial.`);
       setSerie("");
-    } catch {
-      setMensaje("Error al registrar la devolución. Intenta de nuevo.");
+    } catch (err) {
+      console.error("Error devolucion:", err);
+      setMensaje("Error: " + (err.message || "al registrar la devolución. Intenta de nuevo."));
     }
 
     setLoading(false);
