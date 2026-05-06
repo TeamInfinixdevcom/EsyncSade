@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { getFirestore, collection, addDoc, onSnapshot, doc, writeBatch, getDocs, query, where, setDoc, deleteDoc } from "firebase/firestore";
+import { getFirestore, collection, addDoc, onSnapshot, doc, writeBatch, getDocs, query, where, setDoc, deleteDoc, updateDoc } from "firebase/firestore";
 import { createUserWithEmailAndPassword, getAuth as getSecondaryAuth, sendPasswordResetEmail } from "firebase/auth";
 import { deleteApp, initializeApp } from "firebase/app";
 import { auth, firebaseConfig } from "./firebase";
@@ -73,12 +73,24 @@ export default function AdminPanel({ user }) {
   const [paginaReportes, setPaginaReportes] = useState(1);
   const [agenciaReportesSeleccionada, setAgenciaReportesSeleccionada] = useState("");
 
+  // Estados para gestión de eSIMs individuales
+  const [esims, setEsims] = useState([]);
+  const [cargandoEsims, setCargandoEsims] = useState(false);
+  const [filtroEsims, setFiltroEsims] = useState("");
+  const [loteSeleccionado, setLoteSeleccionado] = useState("");
+  const [paginaEsims, setPaginaEsims] = useState(1);
+  const [modalReserva, setModalReserva] = useState(false);
+  const [esimAReservar, setEsimAReservar] = useState(null);
+  const [motivoReserva, setMotivoReserva] = useState("");
+  const [guardandoReserva, setGuardandoReserva] = useState(false);
+  const [esimABorrar, setEsimABorrar] = useState(null);
+
   const panelWidth =
     view === "dashboard"
       ? "min(96vw, 1280px)"
       : view === "agentes"
       ? "min(96vw, 1000px)"
-      : view === "reportes"
+      : view === "reportes" || view === "esims"
       ? "min(96vw, 1280px)"
       : "min(96vw, 1120px)";
 
@@ -629,6 +641,85 @@ export default function AdminPanel({ user }) {
     setMensaje("Lote borrado correctamente.");
   };
 
+  // Cargar eSIMs para visualizar y gestionar individualmente
+  useEffect(() => {
+    const db = getFirestore();
+    const agenciaFiltro = generalAdmin ? (agenciaCargaActiva || null) : agenciaAdmin;
+    
+    if (!agenciaFiltro) {
+      setEsims([]);
+      return;
+    }
+
+    let source;
+    if (loteSeleccionado) {
+      source = query(
+        collection(db, "esims"),
+        where("loteId", "==", loteSeleccionado),
+        where("agencia", "==", agenciaFiltro)
+      );
+    } else {
+      source = query(
+        collection(db, "esims"),
+        where("agencia", "==", agenciaFiltro)
+      );
+    }
+
+    const unsub = onSnapshot(source, (snap) => {
+      const arr = [];
+      snap.forEach(docu => arr.push({ id: docu.id, ...docu.data() }));
+      const ordenado = arr.sort((a, b) => {
+        const fechaA = new Date(a.fechaCarga || 0);
+        const fechaB = new Date(b.fechaCarga || 0);
+        return fechaB - fechaA;
+      });
+      setEsims(ordenado);
+      setPaginaEsims(1);
+    });
+    return () => unsub();
+  }, [generalAdmin, agenciaAdmin, agenciaCargaActiva, loteSeleccionado]);
+
+  // Reservar eSIM con motivo
+  const handleReservarEsim = async () => {
+    if (!esimAReservar || !motivoReserva.trim()) {
+      setMensaje("Debes ingresar un motivo para la reserva.");
+      return;
+    }
+
+    setGuardandoReserva(true);
+    try {
+      const db = getFirestore();
+      await updateDoc(doc(db, "esims", esimAReservar.id), {
+        estado: "reservada",
+        motivoReserva: motivoReserva.trim(),
+        fechaReserva: new Date().toISOString(),
+        usuarioReserva: auth.currentUser?.email || "Desconocido"
+      });
+      setMensaje(`eSIM ${esimAReservar.serie} reservada: "${motivoReserva.trim()}"`);
+      setModalReserva(false);
+      setEsimAReservar(null);
+      setMotivoReserva("");
+    } catch (err) {
+      setMensaje(`Error al reservar eSIM: ${err.message}`);
+    }
+    setGuardandoReserva(false);
+  };
+
+  // Borrar eSIM individual
+  const handleBorrarEsim = async (esim) => {
+    const serie = esim?.serie || "desconocida";
+    if (!window.confirm(`¿Seguro que deseas borrar la eSIM ${serie}?`)) return;
+
+    try {
+      const db = getFirestore();
+      await deleteDoc(doc(db, "esims", esim.id));
+      setMensaje(`eSIM ${serie} borrada correctamente.`);
+      setEsimABorrar(null);
+    } catch (err) {
+      setMensaje(`Error al borrar eSIM: ${err.message}`);
+    }
+  };
+
   const alternarGrupoAgencia = (agencia) => {
     setAgenciasExpandidas((prev) => ({
       ...prev,
@@ -854,6 +945,10 @@ export default function AdminPanel({ user }) {
           onClick={() => setView("reportes")}
           style={{ background: view === "reportes" ? "#ff66ff" : "#232323", color: view === "reportes" ? "#fff" : "#ff66ff", border: 'none', borderRadius: 12, padding: '0.7rem 2rem', fontWeight: 900, fontSize: 18, boxShadow: view === "reportes" ? '0 2px 16px #ff66ffcc' : 'none', cursor: 'pointer', letterSpacing: 1, textShadow: view === "reportes" ? '0 1px 8px #fff' : '0 1px 8px #ff66ffcc' }}
         >Reportes</button>
+        <button
+          onClick={() => setView("esims")}
+          style={{ background: view === "esims" ? "#ff6b6b" : "#232323", color: view === "esims" ? "#fff" : "#ff6b6b", border: 'none', borderRadius: 12, padding: '0.7rem 2rem', fontWeight: 900, fontSize: 18, boxShadow: view === "esims" ? '0 2px 16px #ff6b6bcc' : 'none', cursor: 'pointer', letterSpacing: 1, textShadow: view === "esims" ? '0 1px 8px #fff' : '0 1px 8px #ff6b6bcc' }}
+        >Gestión eSIMs</button>
       </div>
       {view === "dashboard" && (
         <Dashboard user={user} />
@@ -1208,6 +1303,186 @@ export default function AdminPanel({ user }) {
 
           <div style={{ marginTop: 28 }}>
             <TeamReturnsTable user={user} />
+          </div>
+        </div>
+      )}
+      {view === "esims" && (
+        <div style={{ width: '100%', maxWidth: 1280, margin: "0 auto", background: "#181818", borderRadius: 20, boxShadow: "0 0 32px 4px #ff6b6bcc", padding: "2.5vw 2vw", color: "#fff", boxSizing: 'border-box' }}>
+          <h2 style={{ color: "#ff6b6b", textShadow: '0 2px 12px #ff6b6bcc, 0 0 2px #fff', fontWeight: 900, letterSpacing: 2 }}>Gestión de eSIMs Individuales</h2>
+
+          <div style={{ marginBottom: 20, display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <label style={{ display: "block", marginBottom: 6, color: "#ff9b9b", fontWeight: 700, fontSize: 13 }}>Filtrar por lote</label>
+              <select
+                value={loteSeleccionado}
+                onChange={(e) => setLoteSeleccionado(e.target.value)}
+                style={{ width: "100%", padding: 8, borderRadius: 6, border: "1.5px solid #ff6b6b", background: "#232323", color: "#fff", fontSize: 13 }}
+              >
+                <option value="">Todas las eSIMs</option>
+                {historial.map((lote) => (
+                  <option key={lote.id} value={lote.id}>
+                    Lote {new Date(lote.fecha).toLocaleDateString("es-CR")} ({lote.cantidad} series)
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <label style={{ display: "block", marginBottom: 6, color: "#ff9b9b", fontWeight: 700, fontSize: 13 }}>Buscar por serie</label>
+              <input
+                type="text"
+                placeholder="Serie..."
+                value={filtroEsims}
+                onChange={(e) => setFiltroEsims(e.target.value)}
+                style={{ width: "100%", padding: 8, borderRadius: 6, border: "1.5px solid #ff6b6b", background: "#232323", color: "#fff", fontSize: 13, outline: "none" }}
+              />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 12, color: "#ff9b9b", fontSize: 13, fontWeight: 700 }}>
+            Total eSIMs: {esims.length}
+          </div>
+
+          {esims.length === 0 ? (
+            <div style={{ color: "#ffcccc", fontWeight: 700, textAlign: "center", padding: "2rem" }}>
+              No hay eSIMs en esta agencia o lote.
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", background: "#232323", borderRadius: 12, overflow: "hidden", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: "#ff6b6b33", color: "#fff" }}>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ff6b6b" }}>Serie</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ff6b6b" }}>Estado</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ff6b6b" }}>Motivo/Persona</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ff6b6b" }}>Fecha Carga</th>
+                    <th style={{ textAlign: "center", padding: 8, borderBottom: "1px solid #ff6b6b" }}>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {esims
+                    .filter((esim) =>
+                      filtroEsims === "" || String(esim.serie || "").includes(filtroEsims)
+                    )
+                    .map((esim, idx) => (
+                      <tr key={esim.id} style={{ borderBottom: "1px solid #3b3b3b", background: idx % 2 === 0 ? "#1a1a1a" : "#232323" }}>
+                        <td style={{ padding: 8, fontFamily: "monospace", fontSize: 11 }}>{esim.serie}</td>
+                        <td style={{ padding: 8 }}>
+                          <span style={{
+                            background: esim.estado === "disponible" ? "#00ff7733" : esim.estado === "reservada" ? "#ffaa0033" : "#ff000033",
+                            color: esim.estado === "disponible" ? "#00ff77" : esim.estado === "reservada" ? "#ffaa00" : "#ff0000",
+                            padding: "2px 6px",
+                            borderRadius: 4,
+                            fontSize: 10,
+                            fontWeight: 700
+                          }}>
+                            {esim.estado || "sin estado"}
+                          </span>
+                        </td>
+                        <td style={{ padding: 8, fontSize: 11, color: esim.motivoReserva ? "#ffaa00" : "#999" }}>
+                          {esim.motivoReserva || "-"}
+                        </td>
+                        <td style={{ padding: 8, fontSize: 11 }}>
+                          {esim.fechaCarga ? new Date(esim.fechaCarga).toLocaleString("es-CR") : "-"}
+                        </td>
+                        <td style={{ padding: 8, textAlign: "center" }}>
+                          <div style={{ display: "flex", gap: 4, justifyContent: "center", flexWrap: "wrap" }}>
+                            {esim.estado !== "reservada" && (
+                              <button
+                                onClick={() => {
+                                  setEsimAReservar(esim);
+                                  setMotivoReserva("");
+                                  setModalReserva(true);
+                                }}
+                                style={{ background: "#ffaa00", color: "#181818", border: "none", borderRadius: 4, padding: "3px 8px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}
+                              >
+                                Reservar
+                              </button>
+                            )}
+                            <button
+                              onClick={() => setEsimABorrar(esim)}
+                              style={{ background: "#ff6b6b", color: "#fff", border: "none", borderRadius: 4, padding: "3px 8px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}
+                            >
+                              Borrar
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {mensaje && (
+            <div style={{ marginTop: 16, padding: 12, borderRadius: 8, background: mensaje.includes("Error") ? "#ff000033" : "#00ff0033", color: mensaje.includes("Error") ? "#ff6b6b" : "#00ff77", fontWeight: 700 }}>
+              {mensaje}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Modal para reservar eSIM */}
+      {modalReserva && esimAReservar && (
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "#00000080", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div style={{ background: "#181818", borderRadius: 16, border: "2px solid #ffaa00", padding: "2rem", maxWidth: 500, width: "90%", boxShadow: "0 0 32px 4px #ffaa00cc" }}>
+            <h3 style={{ color: "#ffaa00", marginBottom: 12 }}>Reservar eSIM</h3>
+            <p style={{ color: "#fff", marginBottom: 12, fontSize: 13 }}>
+              Serie: <strong style={{ fontFamily: "monospace" }}>{esimAReservar.serie}</strong>
+            </p>
+            <label style={{ display: "block", marginBottom: 8, color: "#ffaa00", fontWeight: 700, fontSize: 13 }}>
+              Motivo o Persona:
+            </label>
+            <textarea
+              value={motivoReserva}
+              onChange={(e) => setMotivoReserva(e.target.value)}
+              placeholder="Ej: Reservada para Juan Pérez o Cambio de SIM pendiente"
+              style={{ width: "100%", padding: 10, borderRadius: 8, border: "1.5px solid #ffaa00", background: "#232323", color: "#fff", fontSize: 13, resize: "vertical", minHeight: 60, outline: "none" }}
+            />
+            <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => {
+                  setModalReserva(false);
+                  setEsimAReservar(null);
+                  setMotivoReserva("");
+                }}
+                style={{ padding: "8px 16px", borderRadius: 6, border: "1px solid #999", background: "#232323", color: "#999", fontWeight: 700, cursor: "pointer" }}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleReservarEsim}
+                disabled={guardandoReserva || !motivoReserva.trim()}
+                style={{ padding: "8px 16px", borderRadius: 6, border: "none", background: guardandoReserva || !motivoReserva.trim() ? "#aa6600" : "#ffaa00", color: "#181818", fontWeight: 700, cursor: guardandoReserva || !motivoReserva.trim() ? "not-allowed" : "pointer", opacity: guardandoReserva || !motivoReserva.trim() ? 0.6 : 1 }}
+              >
+                {guardandoReserva ? "Reservando..." : "Reservar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmación de borrado */}
+      {esimABorrar && (
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "#00000080", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div style={{ background: "#181818", borderRadius: 16, border: "2px solid #ff6b6b", padding: "2rem", maxWidth: 400, width: "90%", boxShadow: "0 0 32px 4px #ff6b6bcc" }}>
+            <h3 style={{ color: "#ff6b6b", marginBottom: 12 }}>Confirmar Borrado</h3>
+            <p style={{ color: "#ffcccc", marginBottom: 16, fontSize: 13 }}>
+              ¿Estás seguro de que deseas borrar la eSIM <strong style={{ fontFamily: "monospace" }}>{esimABorrar.serie}</strong>?
+            </p>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setEsimABorrar(null)}
+                style={{ padding: "8px 16px", borderRadius: 6, border: "1px solid #999", background: "#232323", color: "#999", fontWeight: 700, cursor: "pointer" }}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => handleBorrarEsim(esimABorrar)}
+                style={{ padding: "8px 16px", borderRadius: 6, border: "none", background: "#ff6b6b", color: "#fff", fontWeight: 700, cursor: "pointer" }}
+              >
+                Borrar
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -119,7 +119,12 @@ export default function Dashboard({ user }) {
 
         snapshot.forEach(doc => {
           const data = doc.data();
-          const disponible = isAvailableStatus(data.estado);
+          const estado = String(data.estado || "").trim().toLowerCase();
+          
+          // Excluir eSIMs reservadas del conteo de disponibles/usadas
+          if (estado === "reservada") return;
+          
+          const disponible = isAvailableStatus(estado);
 
           const agencia = normalizeAgency(data.agencia);
           if (!agencia) {
