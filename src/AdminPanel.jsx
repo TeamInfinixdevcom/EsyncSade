@@ -720,6 +720,29 @@ export default function AdminPanel({ user }) {
     }
   };
 
+  // Liberar eSIM reservada (volver a disponible)
+  const handleLiberarEsim = async (esim) => {
+    if (esim.estado !== "reservada") {
+      setMensaje("Esta eSIM no está reservada.");
+      return;
+    }
+
+    if (!window.confirm(`¿Liberar eSIM ${esim.serie} de vuelta a disponible?`)) return;
+
+    try {
+      const db = getFirestore();
+      await updateDoc(doc(db, "esims", esim.id), {
+        estado: "disponible",
+        motivoReserva: null,
+        fechaReserva: null,
+        usuarioReserva: null
+      });
+      setMensaje(`eSIM ${esim.serie} liberada a disponible.`);
+    } catch (err) {
+      setMensaje(`Error al liberar eSIM: ${err.message}`);
+    }
+  };
+
   const alternarGrupoAgencia = (agencia) => {
     setAgenciasExpandidas((prev) => ({
       ...prev,
@@ -1353,8 +1376,8 @@ export default function AdminPanel({ user }) {
                   <tr style={{ background: "#ff6b6b33", color: "#fff" }}>
                     <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ff6b6b" }}>Serie</th>
                     <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ff6b6b" }}>Estado</th>
-                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ff6b6b" }}>Motivo/Persona</th>
-                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ff6b6b" }}>Fecha Carga</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ff6b6b" }}>Motivo/Persona (si reservada)</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #ff6b6b" }}>Reservado por / Fecha</th>
                     <th style={{ textAlign: "center", padding: 8, borderBottom: "1px solid #ff6b6b" }}>Acciones</th>
                   </tr>
                 </thead>
@@ -1381,8 +1404,15 @@ export default function AdminPanel({ user }) {
                         <td style={{ padding: 8, fontSize: 11, color: esim.motivoReserva ? "#ffaa00" : "#999" }}>
                           {esim.motivoReserva || "-"}
                         </td>
-                        <td style={{ padding: 8, fontSize: 11 }}>
-                          {esim.fechaCarga ? new Date(esim.fechaCarga).toLocaleString("es-CR") : "-"}
+                        <td style={{ padding: 8, fontSize: 11, color: "#ccc" }}>
+                          {esim.usuarioReserva && esim.fechaReserva ? (
+                            <>
+                              <div>{esim.usuarioReserva.split("@")[0]}</div>
+                              <div style={{ fontSize: 10, color: "#999" }}>{new Date(esim.fechaReserva).toLocaleString("es-CR")}</div>
+                            </>
+                          ) : (
+                            "-"
+                          )}
                         </td>
                         <td style={{ padding: 8, textAlign: "center" }}>
                           <div style={{ display: "flex", gap: 4, justifyContent: "center", flexWrap: "wrap" }}>
@@ -1396,6 +1426,14 @@ export default function AdminPanel({ user }) {
                                 style={{ background: "#ffaa00", color: "#181818", border: "none", borderRadius: 4, padding: "3px 8px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}
                               >
                                 Reservar
+                              </button>
+                            )}
+                            {esim.estado === "reservada" && (
+                              <button
+                                onClick={() => handleLiberarEsim(esim)}
+                                style={{ background: "#22c55e", color: "#fff", border: "none", borderRadius: 4, padding: "3px 8px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}
+                              >
+                                Liberar
                               </button>
                             )}
                             <button
