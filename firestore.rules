@@ -53,6 +53,10 @@ service cloud.firestore {
       );
     }
 
+    function canDeleteInAgency(agency) {
+      return isGeneralAdmin() || (agency is string && isAgencyAdminOf(agency));
+    }
+
     function isAgencyAdminOf(agency) {
       return isAgencyAdmin() && myAgency() == agency;
     }
@@ -137,39 +141,37 @@ service cloud.firestore {
 
     match /esims/{esimId} {
       allow read: if isGeneralAdmin() ||
-        (resource.data.agencia is string && isAgencyMember(resource.data.agencia));
+        (hasProfile() && (isAgencyMember(resource.data.agencia)));
 
       allow create: if request.resource.data.agencia is string && (
-        isGeneralAdmin() || isAgencyAdminOf(request.resource.data.agencia)
+        isGeneralAdmin() || (isAgencyAdmin() && request.resource.data.agencia == myAgency())
       );
 
       allow update: if isGeneralAdmin() ||
         (
-          resource.data.agencia is string &&
-          isAgencyMember(resource.data.agencia) &&
+          hasProfile() &&
+          resource.data.agencia == myAgency() &&
           request.resource.data.agencia == resource.data.agencia
         );
 
-      allow delete: if isGeneralAdmin() ||
-        (isAgencyAdmin() && resource.data.agencia == myAgency());
+      allow delete: if canDeleteInAgency(resource.data.agencia);
     }
 
     match /lotes/{loteId} {
       allow read: if isGeneralAdmin() ||
-        (resource.data.agencia is string && isAgencyAdminOf(resource.data.agencia));
+        (hasProfile() && (isAgencyAdmin() && resource.data.agencia == myAgency()));
 
       allow create: if request.resource.data.agencia is string && (
-        isGeneralAdmin() || isAgencyAdminOf(request.resource.data.agencia)
+        isGeneralAdmin() || (isAgencyAdmin() && request.resource.data.agencia == myAgency())
       );
 
-      allow update, delete: if isGeneralAdmin() ||
-        (isAgencyAdmin() && resource.data.agencia == myAgency());
+      allow update, delete: if canDeleteInAgency(resource.data.agencia);
     }
 
     match /solicitudes/{solicitudId} {
       allow read: if isGeneralAdmin() ||
         isOwnerEmail(resource.data.usuario) ||
-        (resource.data.agencia is string && isAgencyAdminOf(resource.data.agencia));
+        (hasProfile() && isAgencyAdmin() && resource.data.agencia == myAgency());
 
       allow create: if (
         isGeneralAdmin() && request.resource.data.agencia is string
@@ -179,21 +181,19 @@ service cloud.firestore {
         request.resource.data.agencia == myAgency()
       );
 
-      allow update, delete: if isGeneralAdmin() ||
-        (resource.data.agencia is string && isAgencyAdminOf(resource.data.agencia));
+      allow update, delete: if canDeleteInAgency(resource.data.agencia);
     }
 
     match /devoluciones/{devolucionId} {
       allow read: if isGeneralAdmin() ||
         isOwnerEmail(resource.data.usuario) ||
-        (resource.data.agencia is string && isAgencyAdminOf(resource.data.agencia));
+        (hasProfile() && isAgencyAdmin() && resource.data.agencia == myAgency());
 
       allow create: if hasProfile() &&
         request.resource.data.usuario == request.auth.token.email &&
         request.resource.data.agencia == myAgency();
 
-      allow update, delete: if isGeneralAdmin() ||
-        (resource.data.agencia is string && isAgencyAdminOf(resource.data.agencia));
+      allow update, delete: if canDeleteInAgency(resource.data.agencia);
     }
 
     match /agencias/{agenciaId} {

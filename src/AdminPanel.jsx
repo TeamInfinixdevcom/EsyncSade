@@ -75,10 +75,8 @@ export default function AdminPanel({ user }) {
 
   // Estados para gestión de eSIMs individuales
   const [esims, setEsims] = useState([]);
-  const [cargandoEsims, setCargandoEsims] = useState(false);
   const [filtroEsims, setFiltroEsims] = useState("");
   const [loteSeleccionado, setLoteSeleccionado] = useState("");
-  const [paginaEsims, setPaginaEsims] = useState(1);
   const [modalReserva, setModalReserva] = useState(false);
   const [esimAReservar, setEsimAReservar] = useState(null);
   const [motivoReserva, setMotivoReserva] = useState("");
@@ -629,36 +627,111 @@ export default function AdminPanel({ user }) {
     if (!window.confirm("¿Seguro que deseas borrar este lote? Solo se borrarán las eSIMs disponibles.")) return;
     const db = getFirestore();
     
-    // Obtener todas las eSIMs del lote
-    const esimsQuery = query(collection(db, "esims"), where("loteId", "==", loteId));
-    const esimsSnap = await getDocs(esimsQuery);
-    
-    let disponiblesCount = 0;
-    let mantenidas = 0;
-    const batch = writeBatch(db);
-    
-    esimsSnap.forEach((docu) => {
-      const estado = docu.data().estado;
-      // Solo borrar si está disponible
-      if (estado === "disponible") {
-        batch.delete(doc(db, "esims", docu.id));
-        disponiblesCount++;
-      } else {
-        mantenidas++;
-      }
-    });
+    try {
+      console.log("=== INICIO BORRADO LOTE ===");
+      console.log("Lote ID:", loteId);
+      console.log("Agencia del lote:", lote.agencia);
+      console.log("General Admin:", generalAdmin);
+      console.log("Agencia Admin user (mvega):", agenciaAdmin);
+      
+      // La consulta de un admin de agencia debe estar acotada por agencia para pasar reglas.
+      const esimsQuery = generalAdmin
+        ? query(collection(db, "esims"), where("loteId", "==", loteId))
+        : query(
+            collection(db, "esims"),
+            where("loteId", "==", loteId),
+            where("agencia", "==", lote.agencia)
+          );
+      const esimsSnap = await getDocs(esimsQuery);
+      
+      console.log("Total eSIMs encontradas:", esimsSnap.size);
+      
+      let disponiblesCount = 0;
+      let mantenidas = 0;
+      let sinAgencia = 0;
+      let agenciasMismatch = 0;
+      
+      const batch = writeBatch(db);
+      
+      // Revisar cada eSIM antes de agregar al batch
+      esimsSnap.forEach((docu, idx) => {
+        const esimData = docu.data();
+        const esimAgencia = esimData.agencia || "SIN ASIGNAR";
+        const estado = esimData.estado || "DESCONOCIDO";
+        
+        console.log(`eSIM ${idx + 1}/${esimsSnap.size}:`, { 
+          id: docu.id, 
+          estado: estado,
+          agencia: esimAgencia,
+          loteId: esimData.loteId,
+          agenciaCoincide: esimAgencia === lote.agencia
+        });
+        
+        // Verificar agencia
+        if (!esimData.agencia) {
+          sinAgencia++;
+          console.warn(`  ⚠️ eSIM SIN AGENCIA ASIGNADA`);
+          return;
+        }
+        
+        if (esimData.agencia !== lote.agencia) {
+          agenciasMismatch++;
+          console.warn(`  ⚠️ AGENCIA MISMATCH: ${esimData.agencia} !== ${lote.agencia}`);
+          return;
+        }
+        
+        // Solo borrar si está disponible
+        if (estado === "disponible") {
+          batch.delete(doc(db, "esims", docu.id));
+          disponiblesCount++;
+        } else {
+          mantenidas++;
+        }
+      });
 
-    batch.delete(doc(db, "lotes", loteId));
-    await batch.commit();
-    
-    let mensajeDetalle = `Lote borrado. `;
-    if (disponiblesCount > 0) {
-      mensajeDetalle += `Se borraron ${disponiblesCount} eSIM(s) disponible(s). `;
+      console.log("=== RESUMEN ===");
+      console.log(`Total: ${esimsSnap.size}`);
+      console.log(`- Disponibles a borrar: ${disponiblesCount}`);
+      console.log(`- En uso/reservadas: ${mantenidas}`);
+      console.log(`- Sin agencia asignada: ${sinAgencia}`);
+      console.log(`- Agencia mismatch: ${agenciasMismatch}`);
+      
+      if (disponiblesCount === 0 && mantenidas === 0 && sinAgencia === 0 && agenciasMismatch === 0) {
+        setMensaje("No hay eSIMs para procesar.");
+        console.log("Cancelado: No hay eSIMs");
+        return;
+      }
+      
+      console.log("Borrando lote documento:", loteId);
+      batch.delete(doc(db, "lotes", loteId));
+      
+      console.log("Ejecutando batch.commit()...");
+      await batch.commit();
+      
+      let mensajeDetalle = `Lote borrado. `;
+      if (disponiblesCount > 0) {
+        mensajeDetalle += `Se borraron ${disponiblesCount} eSIM(s) disponible(s). `;
+      }
+      if (mantenidas > 0) {
+        mensajeDetalle += `${mantenidas} eSIM(s) en uso/reservada(s) se mantuvieron en historial. `;
+      }
+      if (sinAgencia > 0) {
+        mensajeDetalle += `⚠️ ${sinAgencia} eSIM(s) sin agencia asignada (no se borraron). `;
+      }
+      if (agenciasMismatch > 0) {
+        mensajeDetalle += `⚠️ ${agenciasMismatch} eSIM(s) con agencia diferente (no se borraron).`;
+      }
+      
+      console.log("=== ✅ ÉXITO ===");
+      setMensaje(mensajeDetalle);
+    } catch (error) {
+      console.error("=== ❌ ERROR EN BORRADO ===");
+      console.error("Error completo:", error);
+      console.error("Código:", error.code);
+      console.error("Mensaje:", error.message);
+      console.error("Detalles:", error.details);
+      setMensaje(`Error al borrar: ${error.message}`);
     }
-    if (mantenidas > 0) {
-      mensajeDetalle += `${mantenidas} eSIM(s) en uso/reservada(s) se mantuvieron en historial.`;
-    }
-    setMensaje(mensajeDetalle);
   };
 
   // Cargar eSIMs para visualizar y gestionar individualmente
@@ -694,7 +767,6 @@ export default function AdminPanel({ user }) {
         return fechaB - fechaA;
       });
       setEsims(ordenado);
-      setPaginaEsims(1);
     });
     return () => unsub();
   }, [generalAdmin, agenciaAdmin, agenciaCargaActiva, loteSeleccionado]);
