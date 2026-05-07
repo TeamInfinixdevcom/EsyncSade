@@ -10,6 +10,7 @@ import EsimRequestForm from "./EsimRequestForm";
 import DevolucionEsims from "./DevolucionEsims";
 import UserReport from "./UserReport";
 import UserUsims from "./UserUsims";
+import UserUsimReport from "./UserUsimReport";
 import AdminPanel from "./AdminPanel";
 
 /* ========= FIREBASE ========= */
@@ -88,6 +89,7 @@ function App() {
     "Devolución eSIMs": <DevolucionEsims user={user} />,
     "Mis uSIMs": <UserUsims user={user} />,
     "Mis Solicitudes": <UserReport user={user} />,
+    "uSIMs fisicas": <UserUsimReport user={user} />,
   };
 
   if (isAdmin) {
