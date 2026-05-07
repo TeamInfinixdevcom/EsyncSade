@@ -9,6 +9,7 @@ export default function Navbar({ onLogout, user, onSelect }) {
     "Devolución eSIMs",
     "Mis uSIMs",
     "Mis Solicitudes",
+    "uSIMs fisicas",
     isAdmin && "Panel Admin",
   ].filter(Boolean);
 
@@ -73,6 +74,13 @@ export default function Navbar({ onLogout, user, onSelect }) {
                     color: "#dff6ff",
                     boxShadow: "0 0 16px rgba(56, 189, 248, 0.34)",
                   }
+                  : item === "uSIMs fisicas"
+                  ? {
+                      ...baseButton,
+                      border: "2px solid #7dd3fc",
+                      color: "#c7ecff",
+                      boxShadow: "0 0 16px rgba(125, 211, 252, 0.28)",
+                    }
                 : item === "Mis Solicitudes"
                 ? featuredButton
                 : baseButton
