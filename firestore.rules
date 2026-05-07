@@ -168,6 +168,102 @@ service cloud.firestore {
       allow update, delete: if canDeleteInAgency(resource.data.agencia);
     }
 
+    match /usim_lotes/{loteId} {
+      allow read: if isGeneralAdmin() ||
+        (hasProfile() && (isAgencyAdmin() && resource.data.agencia == myAgency()));
+
+      allow create: if request.resource.data.agencia is string && (
+        isGeneralAdmin() || (isAgencyAdmin() && request.resource.data.agencia == myAgency())
+      );
+
+      allow update, delete: if canDeleteInAgency(resource.data.agencia);
+    }
+
+    match /usims/{usimId} {
+      allow read: if isGeneralAdmin() ||
+        (
+          hasProfile() && (
+            (isAgencyAdmin() && resource.data.agencia == myAgency()) ||
+            (resource.data.asignadoAUid == request.auth.uid) ||
+            (resource.data.asignadoAEmail is string && request.auth.token.email == resource.data.asignadoAEmail)
+          )
+        );
+
+      allow create: if request.resource.data.agencia is string && (
+        isGeneralAdmin() || (isAgencyAdmin() && request.resource.data.agencia == myAgency())
+      );
+
+      allow update: if isGeneralAdmin() || (
+        hasProfile() && (
+          (isAgencyAdmin() && resource.data.agencia == myAgency() && request.resource.data.agencia == resource.data.agencia) ||
+          (
+            (resource.data.asignadoAUid == request.auth.uid ||
+              (resource.data.asignadoAEmail is string && request.auth.token.email == resource.data.asignadoAEmail)) &&
+            request.resource.data.agencia == resource.data.agencia &&
+            request.resource.data.serie == resource.data.serie &&
+            request.resource.data.codigoBarras == resource.data.codigoBarras &&
+            request.resource.data.loteId == resource.data.loteId &&
+            (
+              (
+                resource.data.estado == "asignada" &&
+                request.resource.data.estado == "usada" &&
+                request.resource.data.asignadoAUid == resource.data.asignadoAUid &&
+                request.resource.data.asignadoAEmail == resource.data.asignadoAEmail &&
+                request.resource.data.usuarioUsoUid == request.auth.uid
+              ) ||
+              (
+                resource.data.estado == "usada" &&
+                request.resource.data.estado == "asignada" &&
+                request.resource.data.asignadoAUid == resource.data.asignadoAUid &&
+                request.resource.data.asignadoAEmail == resource.data.asignadoAEmail &&
+                request.resource.data.devueltoPorUid == request.auth.uid
+              )
+            )
+          )
+        )
+      );
+
+      allow delete: if canDeleteInAgency(resource.data.agencia);
+    }
+
+    match /usim_usos/{usoId} {
+      allow read: if isGeneralAdmin() ||
+        (
+          hasProfile() && (
+            (isAgencyAdmin() && resource.data.agencia == myAgency()) ||
+            (resource.data.usuarioUid == request.auth.uid) ||
+            (resource.data.usuarioEmail is string && request.auth.token.email == resource.data.usuarioEmail)
+          )
+        );
+
+      allow create: if hasProfile() && (
+        isGeneralAdmin() ||
+        (isAgencyAdmin() && request.resource.data.agencia == myAgency()) ||
+        (request.resource.data.usuarioUid == request.auth.uid)
+      );
+
+      allow update, delete: if false;
+    }
+
+    match /usim_devoluciones/{devolucionId} {
+      allow read: if isGeneralAdmin() ||
+        (
+          hasProfile() && (
+            (isAgencyAdmin() && resource.data.agencia == myAgency()) ||
+            (resource.data.usuarioUid == request.auth.uid) ||
+            (resource.data.usuarioEmail is string && request.auth.token.email == resource.data.usuarioEmail)
+          )
+        );
+
+      allow create: if hasProfile() && (
+        isGeneralAdmin() ||
+        (isAgencyAdmin() && request.resource.data.agencia == myAgency()) ||
+        (request.resource.data.usuarioUid == request.auth.uid)
+      );
+
+      allow update, delete: if false;
+    }
+
     match /solicitudes/{solicitudId} {
       allow read: if isGeneralAdmin() ||
         isOwnerEmail(resource.data.usuario) ||

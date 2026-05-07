@@ -65,12 +65,16 @@ function getTipoGestionKey(solicitud) {
 export default function UserReport() {
   const [solicitudes, setSolicitudes] = useState([]);
   const [devoluciones, setDevoluciones] = useState([]);
+  const [usimUsos, setUsimUsos] = useState([]);
+  const [usimDevoluciones, setUsimDevoluciones] = useState([]);
   const [loading, setLoading] = useState(true);
   const [userEmail, setUserEmail] = useState("");
   const [error, setError] = useState("");
   const [filtroHistorial, setFiltroHistorial] = useState("");
   const [paginaSolicitudes, setPaginaSolicitudes] = useState(1);
   const [paginaDevoluciones, setPaginaDevoluciones] = useState(1);
+  const [paginaUsimUsos, setPaginaUsimUsos] = useState(1);
+  const [paginaUsimDevoluciones, setPaginaUsimDevoluciones] = useState(1);
 
   const getTipoGestion = (solicitud) => {
     if (solicitud?.tipoGestion === "cambio_sim_komercial") {
@@ -97,10 +101,14 @@ export default function UserReport() {
       try {
         const solicitudesQuery = query(collection(db, "solicitudes"), where("usuario", "==", userEmail));
         const devolucionesQuery = query(collection(db, "devoluciones"), where("usuario", "==", userEmail));
+        const usimUsosQuery = query(collection(db, "usim_usos"), where("usuarioEmail", "==", userEmail));
+        const usimDevolucionesQuery = query(collection(db, "usim_devoluciones"), where("usuarioEmail", "==", userEmail));
 
-        const [solicitudesSnap, devolucionesSnap] = await Promise.all([
+        const [solicitudesSnap, devolucionesSnap, usimUsosSnap, usimDevolucionesSnap] = await Promise.all([
           getDocs(solicitudesQuery),
           getDocs(devolucionesQuery),
+          getDocs(usimUsosQuery),
+          getDocs(usimDevolucionesQuery),
         ]);
 
         const solicitudesData = solicitudesSnap.docs
@@ -111,8 +119,18 @@ export default function UserReport() {
           .map((docu) => ({ id: docu.id, ...docu.data() }))
           .sort((a, b) => new Date(b.fecha || 0) - new Date(a.fecha || 0));
 
+        const usimUsosData = usimUsosSnap.docs
+          .map((docu) => ({ id: docu.id, ...docu.data() }))
+          .sort((a, b) => new Date(b.fecha || 0) - new Date(a.fecha || 0));
+
+        const usimDevolucionesData = usimDevolucionesSnap.docs
+          .map((docu) => ({ id: docu.id, ...docu.data() }))
+          .sort((a, b) => new Date(b.fecha || 0) - new Date(a.fecha || 0));
+
         setSolicitudes(solicitudesData);
         setDevoluciones(devolucionesData);
+        setUsimUsos(usimUsosData);
+        setUsimDevoluciones(usimDevolucionesData);
       } catch {
         setError("No se pudo cargar tu historial.");
       }
@@ -140,11 +158,33 @@ export default function UserReport() {
     );
   }, [devoluciones, filtroHistorial]);
 
+  const usimUsosFiltrados = useMemo(() => {
+    return usimUsos.filter((item) =>
+      matchesFilter(
+        [item.serie, item.numero, item.numeroCliente, item.cedula, item.identificacion, item.pedido],
+        filtroHistorial
+      )
+    );
+  }, [usimUsos, filtroHistorial]);
+
+  const usimDevolucionesFiltradas = useMemo(() => {
+    return usimDevoluciones.filter((item) =>
+      matchesFilter(
+        [item.serie, item.numero, item.numeroCliente, item.cedula, item.identificacion, item.pedido],
+        filtroHistorial
+      )
+    );
+  }, [usimDevoluciones, filtroHistorial]);
+
   const totalPaginasSolicitudes = Math.max(1, Math.ceil(solicitudesFiltradas.length / PAGE_SIZE));
   const totalPaginasDevoluciones = Math.max(1, Math.ceil(devolucionesFiltradas.length / PAGE_SIZE));
+  const totalPaginasUsimUsos = Math.max(1, Math.ceil(usimUsosFiltrados.length / PAGE_SIZE));
+  const totalPaginasUsimDevoluciones = Math.max(1, Math.ceil(usimDevolucionesFiltradas.length / PAGE_SIZE));
 
   const paginaSolicitudesActual = Math.min(paginaSolicitudes, totalPaginasSolicitudes);
   const paginaDevolucionesActual = Math.min(paginaDevoluciones, totalPaginasDevoluciones);
+  const paginaUsimUsosActual = Math.min(paginaUsimUsos, totalPaginasUsimUsos);
+  const paginaUsimDevolucionesActual = Math.min(paginaUsimDevoluciones, totalPaginasUsimDevoluciones);
 
   const solicitudesPagina = solicitudesFiltradas.slice(
     (paginaSolicitudesActual - 1) * PAGE_SIZE,
@@ -156,12 +196,24 @@ export default function UserReport() {
     paginaDevolucionesActual * PAGE_SIZE
   );
 
+  const usimUsosPagina = usimUsosFiltrados.slice(
+    (paginaUsimUsosActual - 1) * PAGE_SIZE,
+    paginaUsimUsosActual * PAGE_SIZE
+  );
+
+  const usimDevolucionesPagina = usimDevolucionesFiltradas.slice(
+    (paginaUsimDevolucionesActual - 1) * PAGE_SIZE,
+    paginaUsimDevolucionesActual * PAGE_SIZE
+  );
+
   const filtroActivo = normalizeSearch(filtroHistorial) !== "";
 
   const handleFiltroChange = (event) => {
     setFiltroHistorial(event.target.value);
     setPaginaSolicitudes(1);
     setPaginaDevoluciones(1);
+    setPaginaUsimUsos(1);
+    setPaginaUsimDevoluciones(1);
   };
 
   const actividadMetricas = useMemo(() => {
@@ -185,6 +237,24 @@ export default function UserReport() {
       timeline.set(key, current);
     });
 
+    usimUsos.forEach((item) => {
+      const date = normalizeDateValue(item.fecha);
+      if (!date) return;
+      const key = date.toISOString().slice(0, 10);
+      const current = timeline.get(key) || { solicitudes: 0, devoluciones: 0 };
+      current.solicitudes += 1;
+      timeline.set(key, current);
+    });
+
+    usimDevoluciones.forEach((item) => {
+      const date = normalizeDateValue(item.fecha);
+      if (!date) return;
+      const key = date.toISOString().slice(0, 10);
+      const current = timeline.get(key) || { solicitudes: 0, devoluciones: 0 };
+      current.devoluciones += 1;
+      timeline.set(key, current);
+    });
+
     const rows = Array.from(timeline.entries())
       .sort((a, b) => a[0].localeCompare(b[0]))
       .slice(-7)
@@ -197,8 +267,8 @@ export default function UserReport() {
       }));
 
     const actividadTotal = rows.reduce((acc, row) => acc + row.actividad, 0);
-    const devolucionesTotales = devoluciones.length;
-    const solicitudesTotales = solicitudes.length;
+    const devolucionesTotales = devoluciones.length + usimDevoluciones.length;
+    const solicitudesTotales = solicitudes.length + usimUsos.length;
     const balanceActivo = Math.max(0, solicitudesTotales - devolucionesTotales);
 
     return {
@@ -208,7 +278,7 @@ export default function UserReport() {
       balanceActivo,
       actividadPromedio: rows.length ? (actividadTotal / rows.length).toFixed(1) : "0.0",
     };
-  }, [solicitudes, devoluciones]);
+  }, [solicitudes, devoluciones, usimUsos, usimDevoluciones]);
 
   const tipoGestionMetricas = useMemo(() => {
     const buckets = {
@@ -217,7 +287,7 @@ export default function UserReport() {
       plan: { label: "Plan nuevo", count: 0, color: "amber" },
     };
 
-    solicitudes.forEach((item) => {
+    [...solicitudes, ...usimUsos].forEach((item) => {
       const key = getTipoGestionKey(item);
       buckets[key].count += 1;
     });
@@ -229,7 +299,7 @@ export default function UserReport() {
       ...row,
       pulseCount: Math.max(3, Math.min(10, Math.round((row.count / max) * 10))),
     }));
-  }, [solicitudes]);
+  }, [solicitudes, usimUsos]);
 
   return (
     <section className="history-shell">
@@ -244,6 +314,8 @@ export default function UserReport() {
           <div className="history-summary">
             <span className="history-chip history-chip--req">Solicitudes <strong>{solicitudes.length}</strong></span>
             <span className="history-chip history-chip--ret">Devoluciones <strong>{devoluciones.length}</strong></span>
+            <span className="history-chip history-chip--req">uSIMs usadas <strong>{usimUsos.length}</strong></span>
+            <span className="history-chip history-chip--ret">uSIMs devueltas <strong>{usimDevoluciones.length}</strong></span>
           </div>
         </header>
 
@@ -350,9 +422,9 @@ export default function UserReport() {
                       <p className="history-ops-kicker">Behavior signature</p>
                       <h3 className="history-ops-title">Tipos de gestion</h3>
                     </div>
-                    <div className="history-ops-pill history-ops-pill--amber">
-                      {solicitudes.length} total
-                    </div>
+                  <div className="history-ops-pill history-ops-pill--amber">
+                      {solicitudes.length + usimUsos.length} total
+                  </div>
                   </div>
 
                   <div className="history-type-matrix">
@@ -516,6 +588,134 @@ export default function UserReport() {
                             )
                           }
                           disabled={paginaDevolucionesActual === totalPaginasDevoluciones}
+                        >
+                          Siguiente
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </section>
+              </div>
+
+              <div className="history-grid" style={{ marginTop: 18 }}>
+                <section className="history-panel">
+                  <div className="history-panel-head">
+                    <h3 className="history-panel-title">uSIMs registradas por ti</h3>
+                    <span className="history-count history-count--req">
+                      {filtroActivo
+                        ? `${usimUsosFiltrados.length}/${usimUsos.length}`
+                        : usimUsos.length}
+                    </span>
+                  </div>
+
+                  {usimUsosFiltrados.length === 0 ? (
+                    <div className="history-empty">
+                      {usimUsos.length === 0
+                        ? "No tienes uSIMs registradas."
+                        : "No hay uSIMs que coincidan con el filtro."}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="history-table-wrap">
+                        <table className="history-table">
+                          <thead>
+                            <tr>
+                              <th>Serie</th>
+                              <th>Tipo</th>
+                              <th>Pedido</th>
+                              <th>Numero cliente</th>
+                              <th>Cedula</th>
+                              <th>Fecha uso</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {usimUsosPagina.map((item) => (
+                              <tr key={item.id}>
+                                <td>{item.serie || "-"}</td>
+                                <td>{getTipoGestion(item)}</td>
+                                <td>{item.pedido || "-"}</td>
+                                <td>{item.numero || item.numeroCliente || "-"}</td>
+                                <td>{item.cedula || item.identificacion || "-"}</td>
+                                <td>{formatDateTimeWithSeconds(item.fecha)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className="history-pagination">
+                        <button
+                          type="button"
+                          onClick={() => setPaginaUsimUsos((prev) => Math.max(1, Math.min(prev, totalPaginasUsimUsos) - 1))}
+                          disabled={paginaUsimUsosActual === 1}
+                        >
+                          Anterior
+                        </button>
+                        <span>Pagina {paginaUsimUsosActual} de {totalPaginasUsimUsos}</span>
+                        <button
+                          type="button"
+                          onClick={() => setPaginaUsimUsos((prev) => Math.min(totalPaginasUsimUsos, Math.min(prev, totalPaginasUsimUsos) + 1))}
+                          disabled={paginaUsimUsosActual === totalPaginasUsimUsos}
+                        >
+                          Siguiente
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </section>
+
+                <section className="history-panel">
+                  <div className="history-panel-head">
+                    <h3 className="history-panel-title">uSIMs devueltas por ti</h3>
+                    <span className="history-count history-count--ret">
+                      {filtroActivo
+                        ? `${usimDevolucionesFiltradas.length}/${usimDevoluciones.length}`
+                        : usimDevoluciones.length}
+                    </span>
+                  </div>
+
+                  {usimDevolucionesFiltradas.length === 0 ? (
+                    <div className="history-empty">
+                      {usimDevoluciones.length === 0
+                        ? "No tienes devoluciones uSIM registradas."
+                        : "No hay devoluciones uSIM que coincidan con el filtro."}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="history-table-wrap">
+                        <table className="history-table history-table--returns">
+                          <thead>
+                            <tr>
+                              <th>Serie</th>
+                              <th>Lote</th>
+                              <th>Fecha devolucion</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {usimDevolucionesPagina.map((item) => (
+                              <tr key={item.id}>
+                                <td>{item.serie || "-"}</td>
+                                <td>{item.loteId || "-"}</td>
+                                <td>{formatDateTimeWithSeconds(item.fecha)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className="history-pagination history-pagination--ret">
+                        <button
+                          type="button"
+                          onClick={() => setPaginaUsimDevoluciones((prev) => Math.max(1, Math.min(prev, totalPaginasUsimDevoluciones) - 1))}
+                          disabled={paginaUsimDevolucionesActual === 1}
+                        >
+                          Anterior
+                        </button>
+                        <span>Pagina {paginaUsimDevolucionesActual} de {totalPaginasUsimDevoluciones}</span>
+                        <button
+                          type="button"
+                          onClick={() => setPaginaUsimDevoluciones((prev) => Math.min(totalPaginasUsimDevoluciones, Math.min(prev, totalPaginasUsimDevoluciones) + 1))}
+                          disabled={paginaUsimDevolucionesActual === totalPaginasUsimDevoluciones}
                         >
                           Siguiente
                         </button>

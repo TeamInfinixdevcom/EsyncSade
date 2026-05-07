@@ -37,6 +37,7 @@ export default function AdminPanel({ user }) {
   const agencyAdmin = isAgencyAdmin(user) && !generalAdmin;
   const agenciaAdmin = getUserAgency(user);
   const currentUserId = user?.id || auth.currentUser?.uid || "";
+  const currentUserEmail = (user?.email || auth.currentUser?.email || "").trim().toLowerCase();
 
   const [view, setView] = useState("dashboard");
   const [input, setInput] = useState("");
@@ -83,12 +84,25 @@ export default function AdminPanel({ user }) {
   const [guardandoReserva, setGuardandoReserva] = useState(false);
   const [esimABorrar, setEsimABorrar] = useState(null);
 
+  // Estados para uSIMs (SIM físicas)
+  const [usimInput, setUsimInput] = useState("");
+  const [usimSeries, setUsimSeries] = useState([]);
+  const [subiendoUsims, setSubiendoUsims] = useState(false);
+  const [usimHistorial, setUsimHistorial] = useState([]);
+  const [usimPage, setUsimPage] = useState(1);
+  const [usims, setUsims] = useState([]);
+  const [filtroUsims, setFiltroUsims] = useState("");
+  const [usimLoteSeleccionado, setUsimLoteSeleccionado] = useState("");
+  const [usimAsignando, setUsimAsignando] = useState(false);
+  const [usimAsignarUsuarioId, setUsimAsignarUsuarioId] = useState("");
+  const [usimAsignarCantidad, setUsimAsignarCantidad] = useState(25);
+
   const panelWidth =
     view === "dashboard"
       ? "min(96vw, 1280px)"
       : view === "agentes"
       ? "min(96vw, 1000px)"
-      : view === "reportes" || view === "esims"
+      : view === "reportes" || view === "esims" || view === "usims"
       ? "min(96vw, 1280px)"
       : "min(96vw, 1120px)";
 
@@ -507,7 +521,7 @@ export default function AdminPanel({ user }) {
   }, [generalAdmin, agenciaAdmin]);
 
   useEffect(() => {
-    if (view === "agentes") {
+    if (view === "agentes" || view === "usims") {
       fetchAgentes();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -541,6 +555,11 @@ export default function AdminPanel({ user }) {
   const handleExtract = () => {
     const result = extractSeries(input);
     setSeries(result);
+  };
+
+  const handleExtractUsims = () => {
+    const result = extractSeries(usimInput);
+    setUsimSeries(result);
   };
 
   // Subir series como lote a Firestore
@@ -588,6 +607,57 @@ export default function AdminPanel({ user }) {
     setSubiendo(false);
   };
 
+  // Subir uSIMs como lote a Firestore (colecciones separadas)
+  const handleSubirUsims = async () => {
+    if (usimSeries.length === 0) {
+      setMensaje("No hay series uSIM para subir.");
+      return;
+    }
+
+    if (!agenciaCargaActiva) {
+      setMensaje("Debes seleccionar una agencia para cargar uSIMs.");
+      return;
+    }
+
+    setSubiendoUsims(true);
+    setMensaje("");
+    try {
+      const db = getFirestore();
+      const loteRef = await addDoc(collection(db, "usim_lotes"), {
+        fecha: new Date().toISOString(),
+        cantidad: usimSeries.length,
+        usuario: auth.currentUser?.email || "Desconocido",
+        agencia: agenciaCargaActiva,
+        series: usimSeries,
+      });
+
+      for (const serie of usimSeries) {
+        await addDoc(collection(db, "usims"), {
+          serie,
+          codigoBarras: serie,
+          estado: "disponible",
+          fechaCarga: new Date().toISOString(),
+          agencia: agenciaCargaActiva,
+          loteId: loteRef.id,
+          asignadoAUid: null,
+          asignadoAEmail: null,
+          fechaAsignacion: null,
+          fechaUso: null,
+          usuarioUsoUid: null,
+          usuarioUsoEmail: null,
+        });
+      }
+
+      setMensaje(`Se subieron ${usimSeries.length} uSIMs a la agencia ${agenciaCargaActiva}.`);
+      setUsimSeries([]);
+      setUsimInput("");
+      fetchAgencias();
+    } catch {
+      setMensaje("Error al subir las uSIMs. Intenta de nuevo.");
+    }
+    setSubiendoUsims(false);
+  };
+
   // Historial de lotes
   useEffect(() => {
     const db = getFirestore();
@@ -611,6 +681,33 @@ export default function AdminPanel({ user }) {
       setHistorial(filtrado);
       setPage(1); // Reset page on new data
     });
+    return () => unsub();
+  }, [generalAdmin, agenciaAdmin, agenciaCargaActiva]);
+
+  // Historial de lotes uSIM
+  useEffect(() => {
+    const db = getFirestore();
+    const source = generalAdmin
+      ? collection(db, "usim_lotes")
+      : query(collection(db, "usim_lotes"), where("agencia", "==", agenciaAdmin));
+
+    const unsub = onSnapshot(source, (snap) => {
+      const arr = [];
+      snap.forEach((docu) => arr.push({ id: docu.id, ...docu.data() }));
+      const filtrado = arr
+        .filter((lote) => {
+          if (generalAdmin) {
+            if (!agenciaCargaActiva) return true;
+            return sameAgency(lote.agencia, agenciaCargaActiva);
+          }
+          return sameAgency(lote.agencia, agenciaAdmin);
+        })
+        .sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+
+      setUsimHistorial(filtrado);
+      setUsimPage(1);
+    });
+
     return () => unsub();
   }, [generalAdmin, agenciaAdmin, agenciaCargaActiva]);
 
@@ -734,6 +831,107 @@ export default function AdminPanel({ user }) {
     }
   };
 
+  // Asignar uSIMs disponibles a un usuario (por cantidad)
+  const handleAsignarUsims = async () => {
+    const uid = (usimAsignarUsuarioId || "").trim();
+    const cantidad = Number(usimAsignarCantidad);
+
+    if (!uid) {
+      setMensaje("Debes seleccionar un usuario para asignar uSIMs.");
+      return;
+    }
+
+    if (!Number.isFinite(cantidad) || cantidad <= 0) {
+      setMensaje("Cantidad inválida para asignación.");
+      return;
+    }
+
+    const agenciaActiva = generalAdmin ? normalizeAgency(agenciaCargaActiva) : agenciaAdmin;
+    if (!agenciaActiva) {
+      setMensaje("No hay agencia activa para asignar uSIMs.");
+      return;
+    }
+
+    setUsimAsignando(true);
+    setMensaje("");
+
+    try {
+      const db = getFirestore();
+      const usuarioSnap = await getDocs(query(collection(db, "usuarios"), where("__name__", "==", uid)));
+      const usuarioDoc = usuarioSnap.docs[0];
+      const usuarioData = usuarioDoc ? usuarioDoc.data() : null;
+      const usuarioEmail = String(usuarioData?.email || "").trim().toLowerCase() || "-";
+
+      const disponiblesQuery = query(
+        collection(db, "usims"),
+        where("agencia", "==", agenciaActiva),
+        where("estado", "==", "disponible")
+      );
+      const snap = await getDocs(disponiblesQuery);
+      const disponibles = snap.docs.slice(0, cantidad);
+
+      if (disponibles.length === 0) {
+        setMensaje("No hay uSIMs disponibles para asignar en esta agencia.");
+        setUsimAsignando(false);
+        return;
+      }
+
+      if (disponibles.length < cantidad) {
+        setMensaje(`Solo hay ${disponibles.length} uSIM(s) disponible(s) en esta agencia. Se asignarán esas.`);
+      }
+
+      const batch = writeBatch(db);
+      const ahora = new Date().toISOString();
+      disponibles.forEach((docu) => {
+        batch.update(doc(db, "usims", docu.id), {
+          estado: "asignada",
+          asignadoAUid: uid,
+          asignadoAEmail: usuarioEmail,
+          fechaAsignacion: ahora,
+        });
+      });
+      await batch.commit();
+
+      setMensaje(`Asignadas ${disponibles.length} uSIM(s) a ${usuarioEmail}.`);
+    } catch (err) {
+      setMensaje(`Error al asignar uSIMs: ${err?.message || "desconocido"}`);
+    }
+
+    setUsimAsignando(false);
+  };
+
+  // Registrar uso de una uSIM (agente)
+  const handleRegistrarUsoUsim = async (usim) => {
+    if (!usim?.id) return;
+
+    if (!window.confirm(`¿Registrar uso de la uSIM ${usim.serie}?`)) return;
+
+    try {
+      const db = getFirestore();
+      const ahora = new Date().toISOString();
+
+      await updateDoc(doc(db, "usims", usim.id), {
+        estado: "usada",
+        fechaUso: ahora,
+        usuarioUsoUid: currentUserId || null,
+        usuarioUsoEmail: currentUserEmail || null,
+      });
+
+      await addDoc(collection(db, "usim_usos"), {
+        fecha: ahora,
+        agencia: usim.agencia || agenciaAdmin,
+        serie: usim.serie,
+        loteId: usim.loteId || null,
+        usuarioUid: currentUserId || null,
+        usuarioEmail: currentUserEmail || null,
+      });
+
+      setMensaje(`uSIM ${usim.serie} registrada como usada.`);
+    } catch (err) {
+      setMensaje(`Error registrando uso: ${err?.message || "desconocido"}`);
+    }
+  };
+
   // Cargar eSIMs para visualizar y gestionar individualmente
   useEffect(() => {
     const db = getFirestore();
@@ -770,6 +968,67 @@ export default function AdminPanel({ user }) {
     });
     return () => unsub();
   }, [generalAdmin, agenciaAdmin, agenciaCargaActiva, loteSeleccionado]);
+
+  // Cargar uSIMs (segun rol)
+  useEffect(() => {
+    const db = getFirestore();
+    const agenciaFiltro = generalAdmin ? (agenciaCargaActiva || null) : agenciaAdmin;
+
+    if (generalAdmin) {
+      if (!agenciaFiltro) {
+        setUsims([]);
+        return;
+      }
+    }
+
+    let source;
+    if (generalAdmin || agencyAdmin) {
+      const agencia = generalAdmin ? normalizeAgency(agenciaFiltro) : agenciaAdmin;
+      if (!agencia) {
+        setUsims([]);
+        return;
+      }
+
+      if (usimLoteSeleccionado) {
+        source = query(
+          collection(db, "usims"),
+          where("loteId", "==", usimLoteSeleccionado),
+          where("agencia", "==", agencia)
+        );
+      } else {
+        source = query(collection(db, "usims"), where("agencia", "==", agencia));
+      }
+    } else {
+      // Agente: solo ve lo asignado
+      if (!currentUserId && !currentUserEmail) {
+        setUsims([]);
+        return;
+      }
+
+      if (currentUserId) {
+        source = query(collection(db, "usims"), where("asignadoAUid", "==", currentUserId));
+      } else {
+        source = query(collection(db, "usims"), where("asignadoAEmail", "==", currentUserEmail));
+      }
+    }
+
+    const unsub = onSnapshot(source, (snap) => {
+      const arr = [];
+      snap.forEach((docu) => arr.push({ id: docu.id, ...docu.data() }));
+      arr.sort((a, b) => new Date(b.fechaCarga || 0) - new Date(a.fechaCarga || 0));
+      setUsims(arr);
+    });
+
+    return () => unsub();
+  }, [
+    generalAdmin,
+    agencyAdmin,
+    agenciaAdmin,
+    agenciaCargaActiva,
+    usimLoteSeleccionado,
+    currentUserId,
+    currentUserEmail,
+  ]);
 
   // Reservar eSIM con motivo
   const handleReservarEsim = async () => {
@@ -1064,6 +1323,12 @@ export default function AdminPanel({ user }) {
           onClick={() => setView("esims")}
           style={{ background: view === "esims" ? "#ff6b6b" : "#232323", color: view === "esims" ? "#fff" : "#ff6b6b", border: 'none', borderRadius: 12, padding: '0.7rem 2rem', fontWeight: 900, fontSize: 18, boxShadow: view === "esims" ? '0 2px 16px #ff6b6bcc' : 'none', cursor: 'pointer', letterSpacing: 1, textShadow: view === "esims" ? '0 1px 8px #fff' : '0 1px 8px #ff6b6bcc' }}
         >Gestión eSIMs</button>
+        <button
+          onClick={() => setView("usims")}
+          style={{ background: view === "usims" ? "#38bdf8" : "#232323", color: view === "usims" ? "#06121a" : "#38bdf8", border: "none", borderRadius: 12, padding: "0.7rem 2rem", fontWeight: 900, fontSize: 18, boxShadow: view === "usims" ? "0 2px 16px #38bdf8cc" : "none", cursor: "pointer", letterSpacing: 1, textShadow: view === "usims" ? "0 1px 8px #fff" : "0 1px 8px #38bdf8cc" }}
+        >
+          uSIMs
+        </button>
       </div>
       {view === "dashboard" && (
         <Dashboard user={user} />
@@ -1545,6 +1810,263 @@ export default function AdminPanel({ user }) {
 
           {mensaje && (
             <div style={{ marginTop: 16, padding: 12, borderRadius: 8, background: mensaje.includes("Error") ? "#ff000033" : "#00ff0033", color: mensaje.includes("Error") ? "#ff6b6b" : "#00ff77", fontWeight: 700 }}>
+              {mensaje}
+            </div>
+          )}
+        </div>
+      )}
+
+      {view === "usims" && (
+        <div style={{ width: "100%", maxWidth: 1280, margin: "0 auto", background: "#181818", borderRadius: 20, boxShadow: "0 0 32px 4px #38bdf8cc", padding: "2.5vw 2vw", color: "#fff", boxSizing: "border-box" }}>
+          <h2 style={{ color: "#38bdf8", textShadow: "0 2px 12px #38bdf8cc, 0 0 2px #fff", fontWeight: 900, letterSpacing: 2 }}>Gestión de uSIMs (SIM Física)</h2>
+
+          {(generalAdmin || agencyAdmin) && (
+            <div style={{ marginTop: 14, marginBottom: 18, padding: 14, borderRadius: 12, border: "1.5px solid #38bdf855", background: "#0b1620" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end" }}>
+                {generalAdmin ? (
+                  <div style={{ minWidth: 260 }}>
+                    <label style={{ display: "block", marginBottom: 6, color: "#bfe9ff", fontWeight: 700 }}>Agencia destino</label>
+                    <input
+                      list="agencias-usims"
+                      value={agenciaCarga}
+                      onChange={(e) => setAgenciaCarga(e.target.value)}
+                      placeholder="Ejemplo: Pavas"
+                      style={{ width: "100%", padding: 10, borderRadius: 8, border: "1.5px solid #38bdf8", fontSize: 15, background: "#0f2230", color: "#fff", outline: "none" }}
+                    />
+                    <datalist id="agencias-usims">
+                      {agenciasDisponibles.map((agencia) => (
+                        <option key={agencia} value={agencia} />
+                      ))}
+                    </datalist>
+                  </div>
+                ) : (
+                  <div style={{ color: "#bfe9ff", fontWeight: 800 }}>
+                    Agencia activa: {agenciaAdmin || "No asignada"}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleExtractUsims}
+                  style={{ background: "#38bdf8", color: "#06121a", border: "none", borderRadius: 8, padding: "10px 16px", fontWeight: 900, cursor: "pointer", boxShadow: "0 2px 14px #38bdf8aa" }}
+                >
+                  Extraer Series
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSubirUsims}
+                  disabled={subiendoUsims}
+                  style={{ background: subiendoUsims ? "#26627e" : "#0ea5e9", color: "#06121a", border: "none", borderRadius: 8, padding: "10px 16px", fontWeight: 900, cursor: subiendoUsims ? "not-allowed" : "pointer", boxShadow: "0 2px 14px #0ea5e9aa", opacity: subiendoUsims ? 0.7 : 1 }}
+                >
+                  {subiendoUsims ? "Subiendo..." : "Subir uSIMs"}
+                </button>
+              </div>
+
+              <div style={{ marginTop: 12 }}>
+                <textarea
+                  value={usimInput}
+                  onChange={(e) => setUsimInput(e.target.value)}
+                  rows={5}
+                  placeholder="Pega aquí las series uSIM (20 dígitos)..."
+                  style={{ width: "100%", minHeight: 80, padding: 10, borderRadius: 8, border: "1.5px solid #38bdf8", fontSize: 14, background: "#0f2230", color: "#fff", outline: "none", resize: "vertical" }}
+                />
+              </div>
+
+              <div style={{ marginTop: 10 }}>
+                <div style={{ color: "#bfe9ff", fontWeight: 800, marginBottom: 6 }}>Series uSIM encontradas ({usimSeries.length}):</div>
+                <textarea
+                  value={usimSeries.join("\n")}
+                  readOnly
+                  rows={Math.min(6, Math.max(2, usimSeries.length))}
+                  style={{ width: "100%", padding: 10, borderRadius: 8, border: "1.5px solid #38bdf855", fontSize: 13, background: "#0b1620", color: "#bfe9ff", outline: "none", resize: "vertical" }}
+                />
+              </div>
+
+              <div style={{ marginTop: 16 }}>
+                <h3 style={{ color: "#38bdf8", marginBottom: 8 }}>Historial de lotes uSIM</h3>
+                <div style={{ maxHeight: "24vh", overflow: "auto", border: "1.5px solid #38bdf855", borderRadius: 12, background: "#0b1620" }}>
+                  {usimHistorial.length === 0 ? (
+                    <div style={{ padding: 12, color: "#bfe9ff", opacity: 0.8 }}>Sin lotes uSIM.</div>
+                  ) : (
+                    <>
+                      <table style={{ width: "100%", borderCollapse: "collapse", color: "#fff", fontSize: 14 }}>
+                        <thead>
+                          <tr style={{ background: "#38bdf822" }}>
+                            <th style={{ textAlign: "left", padding: 8 }}>Fecha</th>
+                            {generalAdmin && <th style={{ textAlign: "left", padding: 8 }}>Agencia</th>}
+                            <th style={{ textAlign: "left", padding: 8 }}>Cantidad</th>
+                            <th style={{ textAlign: "left", padding: 8 }}>Usuario</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {usimHistorial.slice((usimPage - 1) * PAGE_SIZE, usimPage * PAGE_SIZE).map((lote) => (
+                            <tr key={lote.id} style={{ borderBottom: "1px solid #1c3444" }}>
+                              <td style={{ padding: 8 }}>{new Date(lote.fecha).toLocaleString("es-CR")}</td>
+                              {generalAdmin && <td style={{ padding: 8 }}>{lote.agencia || "-"}</td>}
+                              <td style={{ padding: 8 }}>{lote.cantidad || 0}</td>
+                              <td style={{ padding: 8 }}>{lote.usuario || "-"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 12, padding: 10 }}>
+                        <button
+                          type="button"
+                          onClick={() => setUsimPage(usimPage - 1)}
+                          disabled={usimPage === 1}
+                          style={{ background: "#0ea5e9", color: "#06121a", border: "none", borderRadius: 6, padding: "6px 14px", fontWeight: 900, cursor: usimPage === 1 ? "not-allowed" : "pointer", opacity: usimPage === 1 ? 0.5 : 1 }}
+                        >
+                          Anterior
+                        </button>
+                        <span style={{ color: "#bfe9ff", fontWeight: 800 }}>
+                          Página {usimPage} de {Math.max(1, Math.ceil(usimHistorial.length / PAGE_SIZE))}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setUsimPage(usimPage + 1)}
+                          disabled={usimPage * PAGE_SIZE >= usimHistorial.length}
+                          style={{ background: "#0ea5e9", color: "#06121a", border: "none", borderRadius: 6, padding: "6px 14px", fontWeight: 900, cursor: usimPage * PAGE_SIZE >= usimHistorial.length ? "not-allowed" : "pointer", opacity: usimPage * PAGE_SIZE >= usimHistorial.length ? 0.5 : 1 }}
+                        >
+                          Siguiente
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {(generalAdmin || agencyAdmin) && (
+            <div style={{ marginBottom: 18, padding: 14, borderRadius: 12, border: "1.5px solid #38bdf855", background: "#0b1620" }}>
+              <h3 style={{ color: "#38bdf8", marginBottom: 10 }}>Asignar uSIMs a usuario</h3>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+                <div style={{ minWidth: 320, flex: 1 }}>
+                  <label style={{ display: "block", marginBottom: 6, color: "#bfe9ff", fontWeight: 800, fontSize: 13 }}>Usuario</label>
+                  <select
+                    value={usimAsignarUsuarioId}
+                    onChange={(e) => setUsimAsignarUsuarioId(e.target.value)}
+                    style={{ width: "100%", padding: 10, borderRadius: 8, border: "1.5px solid #38bdf8", background: "#0f2230", color: "#fff", fontSize: 14 }}
+                  >
+                    <option value="">Seleccionar usuario...</option>
+                    {agentes
+                      .filter((u) => (generalAdmin ? !!u.id : sameAgency(u.agencia, agenciaAdmin)))
+                      .filter((u) => !isUserAdmin(u))
+                      .map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {(u.email || u.nombre || u.name || u.id) + (u.agencia ? ` (${u.agencia})` : "")}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+                <div style={{ width: 160 }}>
+                  <label style={{ display: "block", marginBottom: 6, color: "#bfe9ff", fontWeight: 800, fontSize: 13 }}>Cantidad</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={usimAsignarCantidad}
+                    onChange={(e) => setUsimAsignarCantidad(e.target.value)}
+                    style={{ width: "100%", padding: 10, borderRadius: 8, border: "1.5px solid #38bdf8", background: "#0f2230", color: "#fff", fontSize: 14, outline: "none" }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleAsignarUsims}
+                  disabled={usimAsignando}
+                  style={{ background: usimAsignando ? "#26627e" : "#38bdf8", color: "#06121a", border: "none", borderRadius: 8, padding: "10px 16px", fontWeight: 900, cursor: usimAsignando ? "not-allowed" : "pointer", boxShadow: "0 2px 14px #38bdf8aa", opacity: usimAsignando ? 0.7 : 1 }}
+                >
+                  {usimAsignando ? "Asignando..." : "Asignar"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginBottom: 16, display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+            {(generalAdmin || agencyAdmin) && (
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <label style={{ display: "block", marginBottom: 6, color: "#bfe9ff", fontWeight: 800, fontSize: 13 }}>Filtrar por lote</label>
+                <select
+                  value={usimLoteSeleccionado}
+                  onChange={(e) => setUsimLoteSeleccionado(e.target.value)}
+                  style={{ width: "100%", padding: 10, borderRadius: 8, border: "1.5px solid #38bdf8", background: "#0f2230", color: "#fff", fontSize: 14 }}
+                >
+                  <option value="">Todas las uSIMs</option>
+                  {usimHistorial.map((lote) => (
+                    <option key={lote.id} value={lote.id}>
+                      Lote {new Date(lote.fecha).toLocaleDateString("es-CR")} ({lote.cantidad || 0})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <label style={{ display: "block", marginBottom: 6, color: "#bfe9ff", fontWeight: 800, fontSize: 13 }}>Buscar por serie</label>
+              <input
+                type="text"
+                placeholder="Serie..."
+                value={filtroUsims}
+                onChange={(e) => setFiltroUsims(e.target.value)}
+                style={{ width: "100%", padding: 10, borderRadius: 8, border: "1.5px solid #38bdf8", background: "#0f2230", color: "#fff", fontSize: 14, outline: "none" }}
+              />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 12, color: "#bfe9ff", fontSize: 13, fontWeight: 900 }}>
+            Total uSIMs: {usims.length}
+          </div>
+
+          {usims.length === 0 ? (
+            <div style={{ color: "#bfe9ff", fontWeight: 800, textAlign: "center", padding: "2rem", opacity: 0.85 }}>
+              No hay uSIMs para mostrar.
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", background: "#0b1620", borderRadius: 12, overflow: "hidden", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: "#38bdf822", color: "#fff" }}>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #38bdf8" }}>Serie</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #38bdf8" }}>Estado</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #38bdf8" }}>Asignado a</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #38bdf8" }}>Fecha asignación</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid #38bdf8" }}>Fecha uso</th>
+                    <th style={{ textAlign: "center", padding: 8, borderBottom: "1px solid #38bdf8" }}>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {usims
+                    .filter((u) => filtroUsims === "" || String(u.serie || "").includes(filtroUsims))
+                    .map((u, idx) => (
+                      <tr key={u.id} style={{ borderBottom: "1px solid #163041", background: idx % 2 === 0 ? "#0f2230" : "#0b1620" }}>
+                        <td style={{ padding: 8, fontFamily: "monospace", fontSize: 11 }}>{u.serie || "-"}</td>
+                        <td style={{ padding: 8 }}>
+                          <span style={{ background: u.estado === "disponible" ? "#22c55e33" : u.estado === "asignada" ? "#fbbf2433" : "#ef444433", color: u.estado === "disponible" ? "#22c55e" : u.estado === "asignada" ? "#fbbf24" : "#ef4444", padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 900 }}>
+                            {u.estado || "sin estado"}
+                          </span>
+                        </td>
+                        <td style={{ padding: 8, fontSize: 11, color: "#bfe9ff" }}>{u.asignadoAEmail || "-"}</td>
+                        <td style={{ padding: 8, fontSize: 11, color: "#bfe9ff" }}>{u.fechaAsignacion ? new Date(u.fechaAsignacion).toLocaleString("es-CR") : "-"}</td>
+                        <td style={{ padding: 8, fontSize: 11, color: "#bfe9ff" }}>{u.fechaUso ? new Date(u.fechaUso).toLocaleString("es-CR") : "-"}</td>
+                        <td style={{ padding: 8, textAlign: "center" }}>
+                          {(!generalAdmin && !agencyAdmin) && u.estado === "asignada" && (
+                            <button
+                              type="button"
+                              onClick={() => handleRegistrarUsoUsim(u)}
+                              style={{ background: "#38bdf8", color: "#06121a", border: "none", borderRadius: 6, padding: "6px 10px", fontWeight: 900, cursor: "pointer" }}
+                            >
+                              Registrar uso
+                            </button>
+                          )}
+                          {(generalAdmin || agencyAdmin) && <span style={{ color: "#bfe9ff", fontWeight: 800 }}>-</span>}
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {mensaje && (
+            <div style={{ marginTop: 16, padding: 12, borderRadius: 8, background: mensaje.includes("Error") ? "#ef444433" : "#22c55e33", color: mensaje.includes("Error") ? "#fecaca" : "#bbf7d0", fontWeight: 900 }}>
               {mensaje}
             </div>
           )}

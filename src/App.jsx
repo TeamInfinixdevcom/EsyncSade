@@ -9,6 +9,7 @@ import LoadingScreen from "./LoadingScreen";
 import EsimRequestForm from "./EsimRequestForm";
 import DevolucionEsims from "./DevolucionEsims";
 import UserReport from "./UserReport";
+import UserUsims from "./UserUsims";
 import AdminPanel from "./AdminPanel";
 
 /* ========= FIREBASE ========= */
@@ -85,6 +86,7 @@ function App() {
   const sections = {
     "Solicitar eSIM": <EsimRequestForm user={user} />,
     "Devolución eSIMs": <DevolucionEsims user={user} />,
+    "Mis uSIMs": <UserUsims user={user} />,
     "Mis Solicitudes": <UserReport user={user} />,
   };
 

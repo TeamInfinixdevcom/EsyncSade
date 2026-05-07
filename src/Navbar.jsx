@@ -7,6 +7,7 @@ export default function Navbar({ onLogout, user, onSelect }) {
   const menuItems = [
     "Solicitar eSIM",
     "Devolución eSIMs",
+    "Mis uSIMs",
     "Mis Solicitudes",
     isAdmin && "Panel Admin",
   ].filter(Boolean);
@@ -65,6 +66,13 @@ export default function Navbar({ onLogout, user, onSelect }) {
             style={
               item === "Solicitar eSIM"
                 ? primaryButton
+                : item === "Mis uSIMs"
+                ? {
+                    ...baseButton,
+                    border: "2px solid #38bdf8",
+                    color: "#dff6ff",
+                    boxShadow: "0 0 16px rgba(56, 189, 248, 0.34)",
+                  }
                 : item === "Mis Solicitudes"
                 ? featuredButton
                 : baseButton
