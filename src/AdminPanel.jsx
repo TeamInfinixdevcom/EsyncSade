@@ -1699,7 +1699,7 @@ export default function AdminPanel({ user }) {
         >
           uSIMs
         </button>
-        {generalAdmin && (
+        {(generalAdmin || agencyAdmin) && (
           <button
             onClick={() => setView("emergencia")}
             style={{ background: view === "emergencia" ? "#ff9800" : "#232323", color: view === "emergencia" ? "#fff" : "#ff9800", border: "none", borderRadius: 12, padding: "0.7rem 2rem", fontWeight: 900, fontSize: 18, boxShadow: view === "emergencia" ? "0 2px 16px #ff9800cc" : "none", cursor: "pointer", letterSpacing: 1, textShadow: view === "emergencia" ? "0 1px 8px #fff" : "0 1px 8px #ff9800cc" }}
@@ -2720,7 +2720,7 @@ export default function AdminPanel({ user }) {
         </div>
       )}
 
-      {view === "emergencia" && generalAdmin && (
+      {view === "emergencia" && (generalAdmin || agencyAdmin) && (
         <div style={{ width: "100%", maxWidth: 1000, margin: "0 auto", background: "#181818", borderRadius: 20, boxShadow: "0 0 32px 4px #ff9800cc", padding: "2.5vw 2vw", color: "#fff", boxSizing: "border-box" }}>
           <h2 style={{ color: "#ff9800", textShadow: "0 2px 12px #ff9800cc, 0 0 2px #fff", fontWeight: 900, letterSpacing: 2 }}>🚨 Modo Emergencia - Descargar eSIMs Disponibles</h2>
           
@@ -2730,39 +2730,72 @@ export default function AdminPanel({ user }) {
             </p>
             
             <div style={{ marginBottom: 16 }}>
-              <label style={{ display: "block", marginBottom: 8, color: "#ffdd99", fontWeight: 700, fontSize: 14 }}>Selecciona la agencia:</label>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
-                <select
-                  value={agenciaDescargarEsims}
-                  onChange={(e) => setAgenciaDescargarEsims(e.target.value)}
-                  style={{ flex: 1, minWidth: 220, padding: 12, borderRadius: 8, border: "1.5px solid #ff9800", fontSize: 15, background: "#232323", color: "#fff", outline: "none", cursor: "pointer" }}
-                >
-                  <option value="">-- Selecciona una agencia --</option>
-                  {agenciasDisponibles.map((agencia) => (
-                    <option key={agencia} value={agencia}>{agencia}</option>
-                  ))}
-                </select>
-                <button
-                  onClick={handleDescargarEsimsDisponibles}
-                  disabled={descargandoEsims || !agenciaDescargarEsims}
-                  style={{
-                    background: descargandoEsims || !agenciaDescargarEsims ? "#996633" : "linear-gradient(90deg, #ff9800, #ffb84d)",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: 8,
-                    padding: "12px 24px",
-                    fontWeight: 900,
-                    fontSize: 15,
-                    cursor: descargandoEsims || !agenciaDescargarEsims ? "not-allowed" : "pointer",
-                    boxShadow: descargandoEsims || !agenciaDescargarEsims ? "none" : "0 2px 16px #ff9800cc",
-                    opacity: descargandoEsims || !agenciaDescargarEsims ? 0.6 : 1,
-                    transition: "all 0.2s",
-                    whiteSpace: "nowrap"
-                  }}
-                >
-                  {descargandoEsims ? "Descargando..." : "📥 Descargar Excel"}
-                </button>
-              </div>
+              {generalAdmin ? (
+                <>
+                  <label style={{ display: "block", marginBottom: 8, color: "#ffdd99", fontWeight: 700, fontSize: 14 }}>Selecciona la agencia:</label>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+                    <select
+                      value={agenciaDescargarEsims}
+                      onChange={(e) => setAgenciaDescargarEsims(e.target.value)}
+                      style={{ flex: 1, minWidth: 220, padding: 12, borderRadius: 8, border: "1.5px solid #ff9800", fontSize: 15, background: "#232323", color: "#fff", outline: "none", cursor: "pointer" }}
+                    >
+                      <option value="">-- Selecciona una agencia --</option>
+                      {agenciasDisponibles.map((agencia) => (
+                        <option key={agencia} value={agencia}>{agencia}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={handleDescargarEsimsDisponibles}
+                      disabled={descargandoEsims || !agenciaDescargarEsims}
+                      style={{
+                        background: descargandoEsims || !agenciaDescargarEsims ? "#996633" : "linear-gradient(90deg, #ff9800, #ffb84d)",
+                        color: "#fff",
+                        border: "none",
+                        borderRadius: 8,
+                        padding: "12px 24px",
+                        fontWeight: 900,
+                        fontSize: 15,
+                        cursor: descargandoEsims || !agenciaDescargarEsims ? "not-allowed" : "pointer",
+                        boxShadow: descargandoEsims || !agenciaDescargarEsims ? "none" : "0 2px 16px #ff9800cc",
+                        opacity: descargandoEsims || !agenciaDescargarEsims ? 0.6 : 1,
+                        transition: "all 0.2s",
+                        whiteSpace: "nowrap"
+                      }}
+                    >
+                      {descargandoEsims ? "Descargando..." : "📥 Descargar Excel"}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <label style={{ display: "block", marginBottom: 8, color: "#ffdd99", fontWeight: 700, fontSize: 14 }}>Agencia:</label>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+                    <div style={{ flex: 1, minWidth: 220, padding: 12, borderRadius: 8, border: "1.5px solid #ff9800", background: "#232323", color: "#fff", fontWeight: 700, fontSize: 15 }}>
+                      {agenciaAdmin}
+                    </div>
+                    <button
+                      onClick={handleDescargarEsimsDisponibles}
+                      disabled={descargandoEsims}
+                      style={{
+                        background: descargandoEsims ? "#996633" : "linear-gradient(90deg, #ff9800, #ffb84d)",
+                        color: "#fff",
+                        border: "none",
+                        borderRadius: 8,
+                        padding: "12px 24px",
+                        fontWeight: 900,
+                        fontSize: 15,
+                        cursor: descargandoEsims ? "not-allowed" : "pointer",
+                        boxShadow: descargandoEsims ? "none" : "0 2px 16px #ff9800cc",
+                        opacity: descargandoEsims ? 0.6 : 1,
+                        transition: "all 0.2s",
+                        whiteSpace: "nowrap"
+                      }}
+                    >
+                      {descargandoEsims ? "Descargando..." : "📥 Descargar Excel"}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
 
             {mensaje && (
@@ -2778,7 +2811,8 @@ export default function AdminPanel({ user }) {
               <li>El archivo incluye todas las eSIMs con estado <strong>"disponible"</strong></li>
               <li>Cada fila contiene: N°, Serie, Estado, Agencia y Fecha de Carga</li>
               <li>El nombre del archivo incluye la agencia y la fecha de descarga</li>
-              <li>Solo el Admin General puede acceder a esta función</li>
+              <li>El Admin General puede descargar de cualquier agencia</li>
+              <li>Los Admins de Agencia pueden descargar solo de su agencia</li>
             </ul>
           </div>
         </div>
