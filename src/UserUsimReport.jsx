@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { collection, query, where, getDocs } from "firebase/firestore";
+import { collection, query, where, onSnapshot, updateDoc, doc } from "firebase/firestore";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { db } from "./firebase";
 import { auth } from "./firebase";
@@ -7,6 +7,12 @@ import UsimPieChart from "./UsimPieChart";
 import "./user-report.css";
 
 const PAGE_SIZE = 10;
+
+const REQUEST_MODES = {
+  normal: "solicitud_normal",
+  komercial: "cambio_sim_komercial",
+  planNuevoKomercial: "plan_nuevo_komercial",
+};
 
 function normalizeSearch(value) {
   return String(value || "").trim().toLowerCase();
@@ -71,6 +77,13 @@ export default function UserUsimReport() {
   const [filtroHistorial, setFiltroHistorial] = useState("");
   const [paginaUsimUsos, setPaginaUsimUsos] = useState(1);
   const [paginaUsimDevoluciones, setPaginaUsimDevoluciones] = useState(1);
+  const [editUso, setEditUso] = useState(null);
+  const [editPedido, setEditPedido] = useState("");
+  const [editNumero, setEditNumero] = useState("");
+  const [editCedula, setEditCedula] = useState("");
+  const [editTipoGestion, setEditTipoGestion] = useState(REQUEST_MODES.normal);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editFeedback, setEditFeedback] = useState("");
 
   const getTipoGestion = (solicitud) => {
     if (solicitud?.tipoGestion === "cambio_sim_komercial") {
@@ -82,6 +95,18 @@ export default function UserUsimReport() {
     return solicitud?.pedido ? "Solicitud" : "Sin pedido";
   };
 
+  const getDetalleGestion = (tipo) => {
+    if (tipo === REQUEST_MODES.planNuevoKomercial) return "Plan nuevo en Komercial";
+    if (tipo === REQUEST_MODES.komercial) return "Cambio SIM por Komercial";
+    return "Solicitud con pedido";
+  };
+
+  const formatEstadoRevision = (estado) => {
+    if (estado === "rebajada") return "Rebajada";
+    if (estado === "correccion") return "Correccion";
+    return "Pendiente";
+  };
+
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((user) => {
       setUserEmail(user?.email || "");
@@ -90,36 +115,53 @@ export default function UserUsimReport() {
   }, []);
 
   useEffect(() => {
-    async function fetchRegistros() {
-      if (!userEmail) return;
-      setLoading(true);
-      setError("");
-      try {
-        const usimUsosQuery = query(collection(db, "usim_usos"), where("usuarioEmail", "==", userEmail));
-        const usimDevolucionesQuery = query(collection(db, "usim_devoluciones"), where("usuarioEmail", "==", userEmail));
+    if (!userEmail) return undefined;
+    setLoading(true);
+    setError("");
 
-        const [usimUsosSnap, usimDevolucionesSnap] = await Promise.all([
-          getDocs(usimUsosQuery),
-          getDocs(usimDevolucionesQuery),
-        ]);
+    const usimUsosQuery = query(collection(db, "usim_usos"), where("usuarioEmail", "==", userEmail));
+    const usimDevolucionesQuery = query(collection(db, "usim_devoluciones"), where("usuarioEmail", "==", userEmail));
 
-        const usimUsosData = usimUsosSnap.docs
+    let pendingLoads = 2;
+    const markLoaded = () => {
+      pendingLoads = Math.max(0, pendingLoads - 1);
+      if (pendingLoads === 0) setLoading(false);
+    };
+
+    const unsubUsos = onSnapshot(
+      usimUsosQuery,
+      (snap) => {
+        const usimUsosData = snap.docs
           .map((docu) => ({ id: docu.id, ...docu.data() }))
           .sort((a, b) => new Date(b.fecha || 0) - new Date(a.fecha || 0));
-
-        const usimDevolucionesData = usimDevolucionesSnap.docs
-          .map((docu) => ({ id: docu.id, ...docu.data() }))
-          .sort((a, b) => new Date(b.fecha || 0) - new Date(a.fecha || 0));
-
         setUsimUsos(usimUsosData);
-        setUsimDevoluciones(usimDevolucionesData);
-      } catch {
+        markLoaded();
+      },
+      () => {
         setError("No se pudo cargar tu historial de uSIMs.");
+        markLoaded();
       }
-      setLoading(false);
-    }
+    );
 
-    fetchRegistros();
+    const unsubDevoluciones = onSnapshot(
+      usimDevolucionesQuery,
+      (snap) => {
+        const usimDevolucionesData = snap.docs
+          .map((docu) => ({ id: docu.id, ...docu.data() }))
+          .sort((a, b) => new Date(b.fecha || 0) - new Date(a.fecha || 0));
+        setUsimDevoluciones(usimDevolucionesData);
+        markLoaded();
+      },
+      () => {
+        setError("No se pudo cargar tu historial de uSIMs.");
+        markLoaded();
+      }
+    );
+
+    return () => {
+      unsubUsos();
+      unsubDevoluciones();
+    };
   }, [userEmail]);
 
   const usimUsosFiltrados = useMemo(() => {
@@ -162,6 +204,75 @@ export default function UserUsimReport() {
     setFiltroHistorial(event.target.value);
     setPaginaUsimUsos(1);
     setPaginaUsimDevoluciones(1);
+  };
+
+  const openEditModal = (uso) => {
+    setEditUso(uso);
+    setEditPedido(uso?.pedido || "");
+    setEditNumero(uso?.numero || uso?.numeroCliente || "");
+    setEditCedula(uso?.cedula || uso?.identificacion || "");
+    setEditTipoGestion(uso?.tipoGestion || REQUEST_MODES.normal);
+    setEditFeedback("");
+  };
+
+  const closeEditModal = () => {
+    setEditUso(null);
+    setEditPedido("");
+    setEditNumero("");
+    setEditCedula("");
+    setEditTipoGestion(REQUEST_MODES.normal);
+    setEditFeedback("");
+  };
+
+  const handleGuardarCorreccion = async () => {
+    if (!editUso?.id) return;
+
+    const pedidoLimpio = editPedido.trim();
+    const numeroLimpio = editNumero.trim();
+    const cedulaLimpia = editCedula.trim();
+
+    if (!pedidoLimpio && !numeroLimpio && !cedulaLimpia) {
+      setEditFeedback("Debes completar al menos un dato: pedido, numero o cedula.");
+      return;
+    }
+
+    setEditSaving(true);
+    setEditFeedback("");
+    try {
+      await updateDoc(doc(db, "usim_usos", editUso.id), {
+        pedido: pedidoLimpio,
+        numero: numeroLimpio,
+        cedula: cedulaLimpia,
+        tipoGestion: editTipoGestion,
+        detalleGestion: getDetalleGestion(editTipoGestion),
+        estadoRevision: "pendiente",
+        fechaCorreccion: new Date().toISOString(),
+        corregidoPorEmail: userEmail || null,
+      });
+
+      setUsimUsos((prev) =>
+        prev.map((row) =>
+          row.id === editUso.id
+            ? {
+                ...row,
+                pedido: pedidoLimpio,
+                numero: numeroLimpio,
+                cedula: cedulaLimpia,
+                tipoGestion: editTipoGestion,
+                detalleGestion: getDetalleGestion(editTipoGestion),
+                estadoRevision: "pendiente",
+                fechaCorreccion: new Date().toISOString(),
+                corregidoPorEmail: userEmail || null,
+              }
+            : row
+        )
+      );
+
+      closeEditModal();
+    } catch (err) {
+      setEditFeedback(`Error al guardar la correccion: ${err?.message || "desconocido"}`);
+    }
+    setEditSaving(false);
   };
 
   const actividadMetricas = useMemo(() => {
@@ -317,8 +428,8 @@ export default function UserUsimReport() {
                         <AreaChart data={actividadMetricas.timeline} margin={{ top: 10, right: 8, left: -16, bottom: 0 }}>
                           <defs>
                             <linearGradient id="historyUsimUseFill" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="0%" stopColor="#00fff7" stopOpacity={0.44} />
-                              <stop offset="100%" stopColor="#00fff7" stopOpacity={0.02} />
+                              <stop offset="0%" stopColor="#ff0040" stopOpacity={0.44} />
+                              <stop offset="100%" stopColor="#ff0040" stopOpacity={0.02} />
                             </linearGradient>
                             <linearGradient id="historyUsimRetFill" x1="0" y1="0" x2="0" y2="1">
                               <stop offset="0%" stopColor="#bd34fe" stopOpacity={0.42} />
@@ -331,12 +442,12 @@ export default function UserUsimReport() {
                           <Tooltip
                             contentStyle={{
                               background: "#091317",
-                              border: "1px solid rgba(0, 255, 247, 0.25)",
+                              border: "1px solid rgba(255, 0, 64, 0.25)",
                               borderRadius: 10,
-                              color: "#ebfbff",
+                              color: "#ffe0e8",
                             }}
                           />
-                          <Area type="monotone" dataKey="usos" stroke="#00fff7" fill="url(#historyUsimUseFill)" strokeWidth={2.2} />
+                          <Area type="monotone" dataKey="usos" stroke="#ff0040" fill="url(#historyUsimUseFill)" strokeWidth={2.2} />
                           <Area type="monotone" dataKey="devoluciones" stroke="#bd34fe" fill="url(#historyUsimRetFill)" strokeWidth={2.2} />
                         </AreaChart>
                       </ResponsiveContainer>
@@ -409,6 +520,9 @@ export default function UserUsimReport() {
                               <th>Pedido</th>
                               <th>Numero cliente</th>
                               <th>Cedula</th>
+                              <th>Estado</th>
+                              <th>Nota admin</th>
+                              <th>Acciones</th>
                               <th>Fecha uso</th>
                             </tr>
                           </thead>
@@ -420,6 +534,17 @@ export default function UserUsimReport() {
                                 <td>{item.pedido || "-"}</td>
                                 <td>{item.numero || item.numeroCliente || "-"}</td>
                                 <td>{item.cedula || item.identificacion || "-"}</td>
+                                <td>{formatEstadoRevision(item.estadoRevision)}</td>
+                                <td>{item.notaAdmin || "-"}</td>
+                                <td>
+                                  {item.estadoRevision === "correccion" ? (
+                                    <button type="button" className="history-table-action" onClick={() => openEditModal(item)}>
+                                      Editar
+                                    </button>
+                                  ) : (
+                                    "-"
+                                  )}
+                                </td>
                                 <td>{formatDateTimeWithSeconds(item.fecha)}</td>
                               </tr>
                             ))}
@@ -512,6 +637,72 @@ export default function UserUsimReport() {
           )}
         </div>
       </div>
+
+      {editUso && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="history-modal"
+          style={{ position: "fixed", inset: 0, background: "rgba(6, 8, 16, 0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 40 }}
+        >
+          <div style={{ width: "min(520px, 96vw)", background: "#0d141f", borderRadius: 18, padding: 18, border: "1px solid rgba(255, 0, 64, 0.3)", boxShadow: "0 16px 32px rgba(1, 6, 12, 0.7)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div>
+                <p style={{ margin: 0, color: "#ff9bb5", fontWeight: 800, fontSize: 12, letterSpacing: "0.12em", textTransform: "uppercase" }}>Correccion requerida</p>
+                <h3 style={{ margin: "6px 0 0", color: "#fff" }}>Editar uSIM {editUso.serie || ""}</h3>
+              </div>
+              <button type="button" onClick={closeEditModal} style={{ background: "transparent", border: "none", color: "#9fb1c5", fontSize: 22, cursor: "pointer" }}>
+                ×
+              </button>
+            </div>
+
+            {editUso.notaAdmin && (
+              <div style={{ marginBottom: 12, padding: 10, borderRadius: 10, background: "rgba(255, 0, 64, 0.12)", border: "1px solid rgba(255, 0, 64, 0.3)", color: "#ffd6e0", fontSize: 13 }}>
+                Nota del admin: {editUso.notaAdmin}
+              </div>
+            )}
+
+            <div style={{ display: "grid", gap: 10 }}>
+              <label style={{ display: "grid", gap: 6, color: "#dbe7f5", fontSize: 13 }}>
+                Tipo de gestion
+                <select value={editTipoGestion} onChange={(e) => setEditTipoGestion(e.target.value)} style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid rgba(255, 255, 255, 0.1)", background: "#111a28", color: "#f7fbff" }}>
+                  <option value={REQUEST_MODES.normal}>Solicitud con pedido</option>
+                  <option value={REQUEST_MODES.komercial}>Cambio SIM por Komercial</option>
+                  <option value={REQUEST_MODES.planNuevoKomercial}>Plan nuevo en Komercial</option>
+                </select>
+              </label>
+
+              <label style={{ display: "grid", gap: 6, color: "#dbe7f5", fontSize: 13 }}>
+                Pedido
+                <input value={editPedido} onChange={(e) => setEditPedido(e.target.value)} style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid rgba(255, 255, 255, 0.1)", background: "#111a28", color: "#f7fbff" }} />
+              </label>
+
+              <label style={{ display: "grid", gap: 6, color: "#dbe7f5", fontSize: 13 }}>
+                Numero
+                <input value={editNumero} onChange={(e) => setEditNumero(e.target.value)} style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid rgba(255, 255, 255, 0.1)", background: "#111a28", color: "#f7fbff" }} />
+              </label>
+
+              <label style={{ display: "grid", gap: 6, color: "#dbe7f5", fontSize: 13 }}>
+                Cedula
+                <input value={editCedula} onChange={(e) => setEditCedula(e.target.value)} style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid rgba(255, 255, 255, 0.1)", background: "#111a28", color: "#f7fbff" }} />
+              </label>
+            </div>
+
+            {editFeedback && (
+              <div style={{ marginTop: 12, color: "#ffb4c4", fontSize: 12 }}>{editFeedback}</div>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
+              <button type="button" onClick={closeEditModal} style={{ background: "transparent", border: "1px solid rgba(255, 255, 255, 0.2)", color: "#cfe2f7", borderRadius: 10, padding: "8px 14px", fontWeight: 700, cursor: "pointer" }}>
+                Cancelar
+              </button>
+              <button type="button" onClick={handleGuardarCorreccion} disabled={editSaving} style={{ background: editSaving ? "#441018" : "#ff0040", border: "none", color: "#fff", borderRadius: 10, padding: "8px 16px", fontWeight: 800, cursor: editSaving ? "not-allowed" : "pointer" }}>
+                {editSaving ? "Guardando..." : "Enviar correccion"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

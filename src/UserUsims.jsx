@@ -10,6 +10,8 @@ const REQUEST_MODES = {
   planNuevoKomercial: "plan_nuevo_komercial",
 };
 
+const PAGE_SIZE = 10;
+
 function mergeById(rows) {
   const merged = new Map();
   rows.forEach((row) => {
@@ -21,6 +23,7 @@ function mergeById(rows) {
 export default function UserUsims({ user }) {
   const [usimsByUid, setUsimsByUid] = useState([]);
   const [usimsByEmail, setUsimsByEmail] = useState([]);
+  const [usimLoteIds, setUsimLoteIds] = useState(null);
   const [selectedUsimId, setSelectedUsimId] = useState("");
   const [requestMode, setRequestMode] = useState(REQUEST_MODES.normal);
   const [pedido, setPedido] = useState("");
@@ -28,11 +31,21 @@ export default function UserUsims({ user }) {
   const [cedula, setCedula] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [loading, setLoading] = useState(false);
+  const [usimTransferencias, setUsimTransferencias] = useState([]);
+  const [pageAsignadas, setPageAsignadas] = useState(1);
+  const [pageUsadas, setPageUsadas] = useState(1);
+  const [pageTransferencias, setPageTransferencias] = useState(1);
 
   const currentUserId = auth.currentUser?.uid || user?.id || "";
   const currentUserEmail = (user?.email || auth.currentUser?.email || "").trim().toLowerCase();
   const agenciaUsuario = getUserAgency(user);
-  const usims = useMemo(() => mergeById([...usimsByUid, ...usimsByEmail]), [usimsByUid, usimsByEmail]);
+  const usims = useMemo(() => {
+    const merged = mergeById([...usimsByUid, ...usimsByEmail]);
+    if (usimLoteIds === null) return merged;
+    return merged.filter((usim) =>
+      !usim.loteId || usimLoteIds.has(usim.loteId)
+    );
+  }, [usimsByUid, usimsByEmail, usimLoteIds]);
   const selectedUsim = useMemo(
     () => usims.find((usim) => usim.id === selectedUsimId && usim.estado === "asignada") || null,
     [selectedUsimId, usims]
@@ -55,15 +68,38 @@ export default function UserUsims({ user }) {
   }, [currentUserId]);
 
   useEffect(() => {
-    if (!currentUserEmail) {
+    if (!agenciaUsuario) {
+      setUsimLoteIds(null);
       return undefined;
     }
 
-    const q = query(collection(db, "usims"), where("asignadoAEmail", "==", currentUserEmail));
-    return onSnapshot(q, (snap) => {
-      setUsimsByEmail(snap.docs.map((docu) => ({ id: docu.id, ...docu.data() })));
+    const lotesQuery = query(collection(db, "usim_lotes"), where("agencia", "==", agenciaUsuario));
+    return onSnapshot(lotesQuery, (snap) => {
+      const ids = new Set();
+      snap.docs.forEach((docu) => ids.add(docu.id));
+      setUsimLoteIds(ids);
     });
-  }, [currentUserEmail]);
+  }, [agenciaUsuario]);
+
+  useEffect(() => {
+    if (!currentUserId && !currentUserEmail) return;
+
+    const q = query(collection(db, "usim_transferencias"), 
+      where(currentUserId ? "usuarioDestinoUid" : "usuarioDestinoEmail", "==", currentUserId || currentUserEmail)
+    );
+    return onSnapshot(q, (snap) => {
+      const transferenciasIn = snap.docs.map((docu) => ({ id: docu.id, tipo: "recibida", ...docu.data() }));
+      
+      const q2 = query(collection(db, "usim_transferencias"), 
+        where(currentUserId ? "usuarioOrigenUid" : "usuarioOrigenEmail", "==", currentUserId || currentUserEmail)
+      );
+      onSnapshot(q2, (snap2) => {
+        const transferenciasOut = snap2.docs.map((docu) => ({ id: docu.id, tipo: "enviada", ...docu.data() }));
+        setUsimTransferencias([...transferenciasIn, ...transferenciasOut].sort((a, b) => new Date(b.fecha) - new Date(a.fecha)));
+        setPageTransferencias(1);
+      });
+    });
+  }, [currentUserId, currentUserEmail]);
 
   const resetForm = () => {
     setSelectedUsimId("");
@@ -131,6 +167,9 @@ export default function UserUsims({ user }) {
         cedula: cedulaLimpia,
         tipoGestion,
         detalleGestion,
+        estadoRevision: "pendiente",
+        notaAdmin: "",
+        fechaRevision: null,
       });
 
       setMensaje(`uSIM ${selectedUsim.serie} registrada como usada.`);
@@ -193,7 +232,7 @@ export default function UserUsims({ user }) {
 
   return (
     <div className="form-screen">
-      <div className="form-card" style={{ width: "min(980px, 96vw)", maxWidth: 980, "--form-accent": "#38bdf8", "--form-accent-secondary": "#7dd3fc", "--form-accent-glow": "rgba(56, 189, 248, 0.28)" }}>
+      <div className="form-card" style={{ width: "min(980px, 96vw)", maxWidth: 980, "--form-accent": "#ff0055", "--form-accent-secondary": "#ff3377", "--form-accent-glow": "rgba(255, 0, 85, 0.28)" }}>
         <div className="form-hero">
           <div className="form-hero__copy">
             <p className="form-kicker">Mazo fisico asignado</p>
@@ -276,7 +315,7 @@ export default function UserUsims({ user }) {
           <div style={{ overflowX: "auto", position: "relative", zIndex: 1, marginBottom: 18 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", background: "rgba(8, 14, 24, 0.72)", borderRadius: 12, overflow: "hidden", fontSize: 13 }}>
               <thead>
-                <tr style={{ color: "#f7fbff", background: "rgba(56, 189, 248, 0.18)" }}>
+                <tr style={{ color: "#ffe0e8", background: "rgba(255, 0, 64, 0.18)" }}>
                   <th style={{ textAlign: "left", padding: 10 }}>Serie</th>
                   <th style={{ textAlign: "left", padding: 10 }}>Lote</th>
                   <th style={{ textAlign: "left", padding: 10 }}>Asignacion</th>
@@ -284,11 +323,11 @@ export default function UserUsims({ user }) {
                 </tr>
               </thead>
               <tbody>
-                {usimsAsignadas.map((usim) => (
-                  <tr key={usim.id} style={{ borderBottom: "1px solid rgba(125, 211, 252, 0.16)", background: selectedUsimId === usim.id ? "rgba(56, 189, 248, 0.12)" : "transparent" }}>
-                    <td style={{ padding: 10, fontFamily: "monospace", color: "#e0f7ff", fontWeight: 800 }}>{usim.serie}</td>
-                    <td style={{ padding: 10, color: "#cdeeff" }}>{usim.loteId || "-"}</td>
-                    <td style={{ padding: 10, color: "#cdeeff" }}>{usim.fechaAsignacion ? new Date(usim.fechaAsignacion).toLocaleString("es-CR") : "-"}</td>
+                {usimsAsignadas.slice((pageAsignadas - 1) * PAGE_SIZE, pageAsignadas * PAGE_SIZE).map((usim) => (
+                  <tr key={usim.id} style={{ borderBottom: "1px solid rgba(255, 0, 64, 0.16)", background: selectedUsimId === usim.id ? "rgba(255, 0, 64, 0.12)" : "transparent" }}>
+                    <td style={{ padding: 10, fontFamily: "monospace", color: "#ffc0d0", fontWeight: 800 }}>{usim.serie}</td>
+                    <td style={{ padding: 10, color: "#ffb0c0" }}>{usim.loteId || "-"}</td>
+                    <td style={{ padding: 10, color: "#ffb0c0" }}>{usim.fechaAsignacion ? new Date(usim.fechaAsignacion).toLocaleString("es-CR") : "-"}</td>
                     <td style={{ padding: 10 }}>
                       <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
                         <button type="button" className={`form-tab ${selectedUsimId === usim.id ? "is-active" : ""}`} onClick={() => setSelectedUsimId(usim.id)} style={{ width: "auto", padding: "0.45rem 0.7rem" }}>
@@ -300,15 +339,34 @@ export default function UserUsims({ user }) {
                 ))}
               </tbody>
             </table>
+            {usimsAsignadas.length > PAGE_SIZE && (
+              <div style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 12, alignItems: "center" }}>
+                <button 
+                  onClick={() => setPageAsignadas(pageAsignadas - 1)} 
+                  disabled={pageAsignadas === 1}
+                  style={{ background: "#ff0040", color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontWeight: 700, cursor: pageAsignadas === 1 ? "not-allowed" : "pointer", opacity: pageAsignadas === 1 ? 0.5 : 1 }}
+                >
+                  Anterior
+                </button>
+                <span style={{ color: "#ffb0c0", fontWeight: 700 }}>Página {pageAsignadas} de {Math.ceil(usimsAsignadas.length / PAGE_SIZE)}</span>
+                <button 
+                  onClick={() => setPageAsignadas(pageAsignadas + 1)} 
+                  disabled={pageAsignadas >= Math.ceil(usimsAsignadas.length / PAGE_SIZE)}
+                  style={{ background: "#ff0040", color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontWeight: 700, cursor: pageAsignadas >= Math.ceil(usimsAsignadas.length / PAGE_SIZE) ? "not-allowed" : "pointer", opacity: pageAsignadas >= Math.ceil(usimsAsignadas.length / PAGE_SIZE) ? 0.5 : 1 }}
+                >
+                  Siguiente
+                </button>
+              </div>
+            )}
           </div>
         )}
 
         {usimsUsadas.length > 0 && (
           <div style={{ overflowX: "auto", position: "relative", zIndex: 1, marginBottom: 18 }}>
-            <h3 style={{ color: "#dff6ff", fontSize: "1rem", margin: "0 0 10px" }}>uSIMs usadas pendientes de devolución</h3>
+            <h3 style={{ color: "#ffe0e8", fontSize: "1rem", margin: "0 0 10px" }}>uSIMs Usadas</h3>
             <table style={{ width: "100%", borderCollapse: "collapse", background: "rgba(8, 14, 24, 0.72)", borderRadius: 12, overflow: "hidden", fontSize: 13 }}>
               <thead>
-                <tr style={{ color: "#f7fbff", background: "rgba(125, 211, 252, 0.15)" }}>
+                <tr style={{ color: "#ffe0e8", background: "rgba(255, 0, 64, 0.15)" }}>
                   <th style={{ textAlign: "left", padding: 10 }}>Serie</th>
                   <th style={{ textAlign: "left", padding: 10 }}>Pedido</th>
                   <th style={{ textAlign: "left", padding: 10 }}>Numero</th>
@@ -318,13 +376,13 @@ export default function UserUsims({ user }) {
                 </tr>
               </thead>
               <tbody>
-                {usimsUsadas.map((usim) => (
-                  <tr key={usim.id} style={{ borderBottom: "1px solid rgba(125, 211, 252, 0.16)" }}>
-                    <td style={{ padding: 10, fontFamily: "monospace", color: "#e0f7ff", fontWeight: 800 }}>{usim.serie}</td>
-                    <td style={{ padding: 10, color: "#cdeeff" }}>{usim.pedido || "-"}</td>
-                    <td style={{ padding: 10, color: "#cdeeff" }}>{usim.numero || "-"}</td>
-                    <td style={{ padding: 10, color: "#cdeeff" }}>{usim.cedula || "-"}</td>
-                    <td style={{ padding: 10, color: "#cdeeff" }}>{usim.fechaUso ? new Date(usim.fechaUso).toLocaleString("es-CR") : "-"}</td>
+                {usimsUsadas.slice((pageUsadas - 1) * PAGE_SIZE, pageUsadas * PAGE_SIZE).map((usim) => (
+                  <tr key={usim.id} style={{ borderBottom: "1px solid rgba(255, 0, 64, 0.16)" }}>
+                    <td style={{ padding: 10, fontFamily: "monospace", color: "#ffc0d0", fontWeight: 800 }}>{usim.serie}</td>
+                    <td style={{ padding: 10, color: "#ffb0c0" }}>{usim.pedido || "-"}</td>
+                    <td style={{ padding: 10, color: "#ffb0c0" }}>{usim.numero || "-"}</td>
+                    <td style={{ padding: 10, color: "#ffb0c0" }}>{usim.cedula || "-"}</td>
+                    <td style={{ padding: 10, color: "#ffb0c0" }}>{usim.fechaUso ? new Date(usim.fechaUso).toLocaleString("es-CR") : "-"}</td>
                     <td style={{ padding: 10, textAlign: "center" }}>
                       <button type="button" className="form-tab" onClick={() => handleDevolver(usim)} disabled={loading} style={{ width: "auto", padding: "0.45rem 0.7rem" }}>
                         Devolver
@@ -334,6 +392,80 @@ export default function UserUsims({ user }) {
                 ))}
               </tbody>
             </table>
+            {usimsUsadas.length > PAGE_SIZE && (
+              <div style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 12, alignItems: "center" }}>
+                <button 
+                  onClick={() => setPageUsadas(pageUsadas - 1)} 
+                  disabled={pageUsadas === 1}
+                  style={{ background: "#ff0040", color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontWeight: 700, cursor: pageUsadas === 1 ? "not-allowed" : "pointer", opacity: pageUsadas === 1 ? 0.5 : 1 }}
+                >
+                  Anterior
+                </button>
+                <span style={{ color: "#ffb0c0", fontWeight: 700 }}>Página {pageUsadas} de {Math.ceil(usimsUsadas.length / PAGE_SIZE)}</span>
+                <button 
+                  onClick={() => setPageUsadas(pageUsadas + 1)} 
+                  disabled={pageUsadas >= Math.ceil(usimsUsadas.length / PAGE_SIZE)}
+                  style={{ background: "#ff0040", color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontWeight: 700, cursor: pageUsadas >= Math.ceil(usimsUsadas.length / PAGE_SIZE) ? "not-allowed" : "pointer", opacity: pageUsadas >= Math.ceil(usimsUsadas.length / PAGE_SIZE) ? 0.5 : 1 }}
+                >
+                  Siguiente
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {usimTransferencias.length > 0 && (
+          <div style={{ overflowX: "auto", position: "relative", zIndex: 1, marginBottom: 18 }}>
+            <h3 style={{ color: "#ffe0e8", fontSize: "1rem", margin: "0 0 10px" }}>Mi historial de uSIM</h3>
+            <table style={{ width: "100%", borderCollapse: "collapse", background: "rgba(8, 14, 24, 0.72)", borderRadius: 12, overflow: "hidden", fontSize: 13 }}>
+              <thead>
+                <tr style={{ color: "#ffe0e8", background: "rgba(255, 0, 64, 0.15)" }}>
+                  <th style={{ textAlign: "left", padding: 10 }}>Fecha</th>
+                  <th style={{ textAlign: "left", padding: 10 }}>Serie</th>
+                  <th style={{ textAlign: "left", padding: 10 }}>Tipo</th>
+                  <th style={{ textAlign: "left", padding: 10 }}>Usuario origen</th>
+                  <th style={{ textAlign: "left", padding: 10 }}>Usuario destino</th>
+                  <th style={{ textAlign: "left", padding: 10 }}>Admin</th>
+                </tr>
+              </thead>
+              <tbody>
+                {usimTransferencias
+                  .slice((pageTransferencias - 1) * PAGE_SIZE, pageTransferencias * PAGE_SIZE)
+                  .map((transfer) => (
+                  <tr key={transfer.id} style={{ borderBottom: "1px solid rgba(255, 0, 64, 0.16)" }}>
+                    <td style={{ padding: 10, color: "#ffb0c0" }}>{transfer.fecha ? new Date(transfer.fecha).toLocaleString("es-CR") : "-"}</td>
+                    <td style={{ padding: 10, fontFamily: "monospace", color: "#ffc0d0", fontWeight: 800 }}>{transfer.serie}</td>
+                    <td style={{ padding: 10, color: transfer.tipo === "recibida" ? "#22c55e" : "#ff0040", fontWeight: 800 }}>
+                      {transfer.tipo === "recibida" ? "Recibida" : "Enviada"}
+                    </td>
+                    <td style={{ padding: 10, color: "#ffb0c0" }}>{transfer.usuarioOrigenEmail || "-"}</td>
+                    <td style={{ padding: 10, color: "#ffb0c0" }}>{transfer.usuarioDestinoEmail || "-"}</td>
+                    <td style={{ padding: 10, color: "#ffb0c0" }}>{transfer.adminEmail || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {usimTransferencias.length > PAGE_SIZE && (
+              <div style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 12, alignItems: "center" }}>
+                <button
+                  onClick={() => setPageTransferencias(pageTransferencias - 1)}
+                  disabled={pageTransferencias === 1}
+                  style={{ background: "#ff0040", color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontWeight: 700, cursor: pageTransferencias === 1 ? "not-allowed" : "pointer", opacity: pageTransferencias === 1 ? 0.5 : 1 }}
+                >
+                  Anterior
+                </button>
+                <span style={{ color: "#ffb0c0", fontWeight: 700 }}>
+                  Página {pageTransferencias} de {Math.ceil(usimTransferencias.length / PAGE_SIZE)}
+                </span>
+                <button
+                  onClick={() => setPageTransferencias(pageTransferencias + 1)}
+                  disabled={pageTransferencias >= Math.ceil(usimTransferencias.length / PAGE_SIZE)}
+                  style={{ background: "#ff0040", color: "#fff", border: "none", borderRadius: 6, padding: "6px 12px", fontWeight: 700, cursor: pageTransferencias >= Math.ceil(usimTransferencias.length / PAGE_SIZE) ? "not-allowed" : "pointer", opacity: pageTransferencias >= Math.ceil(usimTransferencias.length / PAGE_SIZE) ? 0.5 : 1 }}
+                >
+                  Siguiente
+                </button>
+              </div>
+            )}
           </div>
         )}
 

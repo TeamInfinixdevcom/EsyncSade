@@ -242,7 +242,25 @@ service cloud.firestore {
         (request.resource.data.usuarioUid == request.auth.uid)
       );
 
-      allow update, delete: if false;
+      allow update: if
+        isGeneralAdmin() ||
+        (
+          isAgencyAdmin() &&
+          resource.data.agencia == myAgency() &&
+          request.resource.data.agencia == resource.data.agencia
+        ) ||
+        (
+          resource.data.usuarioUid == request.auth.uid &&
+          resource.data.estadoRevision == "correccion" &&
+          request.resource.data.estadoRevision == "pendiente" &&
+          request.resource.data.agencia == resource.data.agencia &&
+          request.resource.data.serie == resource.data.serie &&
+          request.resource.data.usimId == resource.data.usimId &&
+          request.resource.data.usuarioUid == resource.data.usuarioUid &&
+          request.resource.data.usuarioEmail == resource.data.usuarioEmail
+        );
+
+      allow delete: if false;
     }
 
     match /usim_devoluciones/{devolucionId} {
@@ -290,6 +308,26 @@ service cloud.firestore {
         request.resource.data.agencia == myAgency();
 
       allow update, delete: if canDeleteInAgency(resource.data.agencia);
+    }
+
+    match /usim_transferencias/{transferenciaId} {
+      allow read: if isGeneralAdmin() ||
+        (
+          hasProfile() && (
+            (isAgencyAdmin() && resource.data.agencia == myAgency()) ||
+            (resource.data.usuarioOrigenUid == request.auth.uid) ||
+            (resource.data.usuarioOrigenEmail is string && request.auth.token.email == resource.data.usuarioOrigenEmail) ||
+            (resource.data.usuarioDestinoUid == request.auth.uid) ||
+            (resource.data.usuarioDestinoEmail is string && request.auth.token.email == resource.data.usuarioDestinoEmail)
+          )
+        );
+
+      allow create: if hasProfile() && (
+        isGeneralAdmin() ||
+        (isAgencyAdmin() && request.resource.data.agencia == myAgency())
+      );
+
+      allow update, delete: if false;
     }
 
     match /agencias/{agenciaId} {

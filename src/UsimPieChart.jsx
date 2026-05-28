@@ -9,7 +9,7 @@ export default function UsimPieChart({ usadas, devueltas }) {
     { name: "Usadas", value: usadas },
     { name: "Devueltas", value: devueltas },
   ];
-  const COLORS = ["#00fff7", "#ff3c2f"];
+  const COLORS = ["#ff0040", "#ff3c2f"];
 
   const disponibilidadRatio = total === 0 ? 0 : usadas / total;
   const usoRatio = total === 0 ? 0 : devueltas / total;
@@ -105,12 +105,12 @@ export default function UsimPieChart({ usadas, devueltas }) {
                 formatter={(value) => `${value} uSIMs`}
                 contentStyle={{
                   background: "#091317",
-                  border: "1px solid #00fff766",
+                  border: "1px solid #ff004066",
                   borderRadius: 8,
-                  color: "#d7fffd",
+                  color: "#ffe0e8",
                 }}
-                itemStyle={{ color: "#d7fffd" }}
-                labelStyle={{ color: "#8fece8" }}
+                itemStyle={{ color: "#ffe0e8" }}
+                labelStyle={{ color: "#ffb0c0" }}
               />
               <Legend verticalAlign="bottom" height={36} />
             </PieChart>
