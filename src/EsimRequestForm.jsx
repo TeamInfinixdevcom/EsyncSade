@@ -282,7 +282,10 @@ export default function EsimRequestForm({ user }) {
 
   return (
     <div className="form-screen">
-      <form onSubmit={handleSubmit} className={`form-card ${modeVisualClass}`}>
+      <form
+        onSubmit={handleSubmit}
+        className={`form-card ${modeVisualClass} form-card--request${submitting ? " is-submitting" : ""}`}
+      >
         <div className="form-hero">
           <div className="form-hero__copy">
             <p className="form-kicker">Asignacion automatica</p>
@@ -451,7 +454,11 @@ export default function EsimRequestForm({ user }) {
           </div>
         )}
 
-        <button type="submit" disabled={!agenciaActiva || submitting} className="form-button form-button--primary">
+        <button
+          type="submit"
+          disabled={!agenciaActiva || submitting}
+          className={`form-button form-button--primary${submitting ? " is-loading" : ""}`}
+        >
           {submitting
             ? "Asignando eSIM..."
             : isPlanNuevoKomercial

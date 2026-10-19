@@ -64,6 +64,13 @@ export default function AdminPanel({ user }) {
   const [editAgenciaUsuario, setEditAgenciaUsuario] = useState("");
   const [editActivoUsuario, setEditActivoUsuario] = useState(true);
   const [guardandoUsuario, setGuardandoUsuario] = useState(false);
+  const [usuarioATrasladar, setUsuarioATrasladar] = useState(null);
+  const [agenciaDestinoTraslado, setAgenciaDestinoTraslado] = useState("");
+  const [mensajeTraslado, setMensajeTraslado] = useState("");
+  const [guardandoTraslado, setGuardandoTraslado] = useState(false);
+  const [trasladosPendientes, setTrasladosPendientes] = useState([]);
+  const [cargandoTraslados, setCargandoTraslados] = useState(false);
+  const [aceptandoTrasladoId, setAceptandoTrasladoId] = useState("");
   const [vistaAgrupadaAgencias, setVistaAgrupadaAgencias] = useState(true);
   const [agenciasExpandidas, setAgenciasExpandidas] = useState({});
   
@@ -257,6 +264,63 @@ export default function AdminPanel({ user }) {
     return agencyAdmin && rol === "agente" && mismaAgencia;
   };
 
+  const iniciarTrasladoUsuario = (usuarioRow) => {
+    setUsuarioATrasladar(usuarioRow);
+    setAgenciaDestinoTraslado("");
+    setMensajeTraslado("");
+  };
+
+  const cerrarTrasladoUsuario = () => {
+    if (guardandoTraslado) return;
+    setUsuarioATrasladar(null);
+    setAgenciaDestinoTraslado("");
+    setMensajeTraslado("");
+  };
+
+  const guardarTrasladoUsuario = async () => {
+    if (!generalAdmin || !usuarioATrasladar || isGeneralAdmin(usuarioATrasladar)) return;
+
+    const agenciaDestinoIngresada = normalizeAgency(agenciaDestinoTraslado);
+    const agenciaDestino = agenciasDisponibles.find((agencia) => sameAgency(agencia, agenciaDestinoIngresada));
+    if (!agenciaDestino) {
+      setMensajeTraslado("Selecciona una agencia existente del listado.");
+      return;
+    }
+    if (sameAgency(agenciaDestino, usuarioATrasladar.agencia)) {
+      setMensajeTraslado("El usuario ya pertenece a esa agencia.");
+      return;
+    }
+
+    setGuardandoTraslado(true);
+    setMensajeTraslado("");
+    try {
+      const db = getFirestore();
+      await setDoc(doc(db, "traslados_usuarios", usuarioATrasladar.id), {
+        usuarioUid: usuarioATrasladar.id,
+        email: usuarioATrasladar.email || "",
+        nombre: usuarioATrasladar.nombre || usuarioATrasladar.name || "",
+        agenciaOrigen: normalizeAgency(usuarioATrasladar.agencia),
+        agenciaDestino,
+        estado: "pendiente",
+        solicitadoPor: currentUserEmail,
+        fechaSolicitud: new Date().toISOString(),
+      });
+
+      const nombreUsuario = usuarioATrasladar.email || usuarioATrasladar.nombre || "Usuario";
+      const agenciaAnterior = normalizeAgency(usuarioATrasladar.agencia) || "Sin agencia";
+      const mensajeExito = `Traslado de ${nombreUsuario} enviado de ${agenciaAnterior} a ${agenciaDestino}. El admin receptor debe aceptarlo.`;
+      setUsuarioATrasladar(null);
+      setAgenciaDestinoTraslado("");
+      fetchAgentes();
+      fetchAgencias();
+      setMensajeAgente(mensajeExito);
+    } catch (err) {
+      setMensajeTraslado(`No se pudo trasladar el usuario. ${err?.message || ""}`);
+    } finally {
+      setGuardandoTraslado(false);
+    }
+  };
+
   const handleEliminarUsuario = async (usuarioRow) => {
     const esUsuarioActual = currentUserId && usuarioRow.id === currentUserId;
     if (esUsuarioActual) {
@@ -334,6 +398,63 @@ export default function AdminPanel({ user }) {
       setMensajeAgente("No se pudo cargar la lista de agentes.");
     }
     setCargandoAgentes(false);
+  };
+
+  const fetchTrasladosPendientes = async () => {
+    if (!agencyAdmin || !agenciaAdmin) {
+      setTrasladosPendientes([]);
+      return;
+    }
+
+    setCargandoTraslados(true);
+    try {
+      const db = getFirestore();
+      const snapshot = await getDocs(query(
+        collection(db, "traslados_usuarios"),
+        where("agenciaDestino", "==", agenciaAdmin)
+      ));
+      const rows = snapshot.docs
+        .map((docu) => ({ id: docu.id, ...docu.data() }))
+        .filter((traslado) => traslado.estado === "pendiente");
+      setTrasladosPendientes(rows);
+    } catch (err) {
+      setMensajeAgente(`No se pudieron cargar los traslados pendientes. ${err?.message || ""}`);
+      setTrasladosPendientes([]);
+    } finally {
+      setCargandoTraslados(false);
+    }
+  };
+
+  const aceptarTrasladoUsuario = async (traslado) => {
+    const usuarioUid = traslado?.usuarioUid || traslado?.id;
+    if (!agencyAdmin || !agenciaAdmin || !usuarioUid || !sameAgency(traslado.agenciaDestino, agenciaAdmin)) return;
+
+    const nombreUsuario = traslado.email || traslado.nombre || "este usuario";
+    if (!window.confirm(`¿Incorporar a ${nombreUsuario} a la agencia ${agenciaAdmin}?`)) return;
+
+    setAceptandoTrasladoId(usuarioUid);
+    try {
+      const db = getFirestore();
+      const batch = writeBatch(db);
+      batch.update(doc(db, "usuarios", usuarioUid), {
+        agencia: agenciaAdmin,
+        fechaActualizacion: new Date().toISOString(),
+      });
+      batch.update(doc(db, "traslados_usuarios", usuarioUid), {
+        estado: "aceptado",
+        fechaAceptacion: new Date().toISOString(),
+        aceptadoPorUid: auth.currentUser?.uid || currentUserId,
+      });
+      await batch.commit();
+
+      fetchAgentes();
+      fetchTrasladosPendientes();
+      setMensajeAgente(`${nombreUsuario} incorporado a ${agenciaAdmin}. Debe recargar la aplicación para actualizar su acceso.`);
+    } catch (err) {
+      setMensajeAgente(`No se pudo aceptar el traslado. ${err?.message || ""}`);
+    } finally {
+      setAceptandoTrasladoId("");
+    }
   };
 
   const fetchAgencias = async () => {
@@ -526,6 +647,11 @@ export default function AdminPanel({ user }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, generalAdmin, agenciaAdmin]);
+
+  useEffect(() => {
+    if (view === "agentes" && agencyAdmin) fetchTrasladosPendientes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, agencyAdmin, agenciaAdmin]);
 
   useEffect(() => {
     if (view === "reportes") {
@@ -1212,6 +1338,15 @@ export default function AdminPanel({ user }) {
               >
                 Editar
               </button>
+              {generalAdmin && !esAdminGeneralFila && (
+                <button
+                  type="button"
+                  onClick={() => iniciarTrasladoUsuario(a)}
+                  style={{ background: "#38bdf8", color: "#06121a", border: "none", borderRadius: 6, padding: "4px 10px", fontWeight: 700, cursor: "pointer" }}
+                >
+                  Trasladar
+                </button>
+              )}
               {puedeResetearFila && (
                 <button
                   type="button"
@@ -1436,8 +1571,8 @@ export default function AdminPanel({ user }) {
           </h2>
           <div style={{ marginBottom: 10, color: "#fff3bf", fontWeight: 600 }}>
             {generalAdmin
-              ? "Puedes crear agentes y administradores de agencia, asignando su agencia." 
-              : `Solo puedes crear agentes de tu agencia (${agenciaAdmin || "No asignada"}).`}
+              ? "Puedes crear usuarios por agencia y trasladarlos desde su fila."
+              : `Puedes crear agentes y recibir traslados en tu agencia (${agenciaAdmin || "No asignada"}).`}
           </div>
           <div style={{ marginBottom: 10 }}>
             <input
@@ -1579,6 +1714,68 @@ export default function AdminPanel({ user }) {
                 renderUsuariosTable(usuariosFiltrados)
               )}
             </>
+          )}
+          {agencyAdmin && (
+            <div style={{ marginTop: 22, padding: 14, borderRadius: 12, border: "1px solid #38bdf855", background: "#0b1620" }}>
+              <h3 style={{ color: "#38bdf8", marginTop: 0 }}>Traslados pendientes a {agenciaAdmin}</h3>
+              {cargandoTraslados ? (
+                <div>Cargando traslados...</div>
+              ) : trasladosPendientes.length === 0 ? (
+                <div style={{ color: "#b8c8d0" }}>No hay traslados pendientes.</div>
+              ) : (
+                <div style={{ display: "grid", gap: 10 }}>
+                  {trasladosPendientes.map((traslado) => (
+                    <div key={traslado.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: 12, borderRadius: 8, background: "#152430" }}>
+                      <div>
+                        <strong>{traslado.nombre || traslado.email || "Usuario"}</strong>
+                        {traslado.email && <div style={{ color: "#b8c8d0", fontSize: 13 }}>{traslado.email}</div>}
+                        <div style={{ color: "#b8c8d0", fontSize: 13 }}>Desde: {traslado.agenciaOrigen || "Sin agencia"}</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => aceptarTrasladoUsuario(traslado)}
+                        disabled={aceptandoTrasladoId === (traslado.usuarioUid || traslado.id)}
+                        style={{ background: "#38bdf8", color: "#06121a", border: 0, borderRadius: 7, padding: "8px 12px", fontWeight: 800, cursor: aceptandoTrasladoId ? "wait" : "pointer" }}
+                      >
+                        {aceptandoTrasladoId === (traslado.usuarioUid || traslado.id) ? "Incorporando..." : "Incorporar a mi agencia"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {usuarioATrasladar && (
+            <div style={{ position: "fixed", inset: 0, zIndex: 3000, background: "#000b", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+              <div role="dialog" aria-modal="true" aria-labelledby="trasladar-usuario-titulo" style={{ width: "100%", maxWidth: 480, background: "#181818", border: "1px solid #38bdf8", borderRadius: 14, padding: 22, color: "#fff", boxShadow: "0 0 28px #38bdf855" }}>
+                <h3 id="trasladar-usuario-titulo" style={{ color: "#38bdf8", marginTop: 0 }}>Trasladar usuario</h3>
+                <div style={{ marginBottom: 14 }}>
+                  {usuarioATrasladar.nombre || usuarioATrasladar.name || usuarioATrasladar.email}
+                  <div style={{ color: "#b8c8d0", fontSize: 13 }}>{usuarioATrasladar.email || ""}</div>
+                </div>
+                <div style={{ marginBottom: 14, color: "#d7e5eb" }}>
+                  Agencia actual: <strong>{normalizeAgency(usuarioATrasladar.agencia) || "Sin agencia"}</strong>
+                </div>
+                <label htmlFor="agenciaDestinoTraslado" style={{ display: "block", marginBottom: 6, color: "#bfe9ff", fontWeight: 700 }}>Agencia destino</label>
+                <input
+                  id="agenciaDestinoTraslado"
+                  list="agencias-edicion"
+                  value={agenciaDestinoTraslado}
+                  onChange={(e) => setAgenciaDestinoTraslado(e.target.value)}
+                  placeholder="Selecciona o escribe una agencia"
+                  autoFocus
+                  style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 8, border: "1px solid #38bdf8", background: "#0f2230", color: "#fff" }}
+                />
+                <p style={{ color: "#b8c8d0", fontSize: 13 }}>El admin de la agencia destino deberá aceptar el traslado.</p>
+                {mensajeTraslado && <div role="alert" style={{ color: "#ffb4ab", marginBottom: 12 }}>{mensajeTraslado}</div>}
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+                  <button type="button" onClick={cerrarTrasladoUsuario} disabled={guardandoTraslado} style={{ background: "#444", color: "#fff", border: 0, borderRadius: 7, padding: "9px 14px", cursor: "pointer" }}>Cancelar</button>
+                  <button type="button" onClick={guardarTrasladoUsuario} disabled={guardandoTraslado || !agenciaDestinoTraslado.trim()} style={{ background: "#38bdf8", color: "#06121a", border: 0, borderRadius: 7, padding: "9px 14px", fontWeight: 800, cursor: guardandoTraslado ? "wait" : "pointer" }}>
+                    {guardandoTraslado ? "Trasladando..." : "Confirmar traslado"}
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       )}

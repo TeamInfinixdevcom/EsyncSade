@@ -1,192 +1,67 @@
 import React from "react";
 import { isUserAdmin } from "./userProfile";
+import "./navbar.css";
 
-export default function Navbar({ onLogout, user, onSelect }) {
-  const isAdmin = isUserAdmin(user);
+const baseMenuItems = [
+  { value: "Solicitar eSIM", label: "Solicitar eSIM", tone: "pink" },
+  { value: "Devolución eSIMs", label: "Devolución eSIMs", tone: "cyan" },
+  { value: "Mis uSIMs", label: "Mis uSIMs", tone: "violet" },
+  { value: "Mis Solicitudes", label: "Mis Solicitudes", tone: "rose", featured: true },
+  { value: "uSIMs fisicas", label: "uSIMs físicas", tone: "teal" },
+];
 
-  const menuItems = [
-    "Solicitar eSIM",
-    "Devolución eSIMs",
-    "Mis uSIMs",
-    "Mis Solicitudes",
-    "uSIMs fisicas",
-    isAdmin && "Panel Admin",
-  ].filter(Boolean);
-
-  const baseButton = {
-    border: "2px solid #00fff7",
-    background: "#181818",
-    color: "#00fff7",
-    borderRadius: 20,
-    padding: "0.5rem 1.5rem",
-    fontWeight: 900,
-    fontSize: 16,
-    letterSpacing: 1,
-    cursor: "pointer",
-    transition: "all 0.2s ease",
-    outline: "none",
-  };
-
-  const primaryButton = {
-    ...baseButton,
-    background: "#00fff7",
-    color: "#181818",
-    boxShadow: "0 2px 16px #00fff7cc",
-    textShadow: "0 1px 8px #fff",
-  };
-
-  const featuredButton = {
-    ...baseButton,
-    position: "relative",
-    overflow: "hidden",
-    border: "2px solid #7af9ff",
-    color: "#eaffff",
-    boxShadow: "0 0 18px rgba(0, 255, 247, 0.32), 0 0 34px rgba(122, 249, 255, 0.12)",
-    animation: "nav-feature-glow 2.8s ease-in-out infinite",
-  };
+export default function Navbar({ onLogout, user, onSelect, activeSection }) {
+  const menuItems = isUserAdmin(user)
+    ? [...baseMenuItems, { value: "Panel Admin", label: "Panel Admin", tone: "amber" }]
+    : baseMenuItems;
 
   return (
-    <nav style={styles.nav}>
-      {/* Logo y Usuario */}
-      <div style={styles.userInfo}>
-        <img src="/vite.svg" alt="Logo" style={styles.logo} />
-        <div>
-          <div style={styles.appName}>EsyncSadeCloud</div>
-          <div style={styles.userName}>{user?.name || "Usuario"}</div>
-          <div style={styles.userEmail}>{user?.email || ""}</div>
-          {user?.agencia && <div style={styles.userAgency}>Agencia: {user.agencia}</div>}
+    <nav className="app-navbar" aria-label="Navegación principal">
+      <div className="app-navbar__brand">
+        <div className="app-navbar__brand-mark" aria-hidden="true">III</div>
+        <div className="app-navbar__brand-copy">
+          <div className="app-navbar__brand-name">Esync Sade</div>
+          <div className="app-navbar__brand-subline">
+            <span>Cloud III</span>
+            <span className="app-navbar__version">Nueva versión</span>
+          </div>
         </div>
       </div>
 
-      {/* Menú */}
-      <div style={styles.menu}>
-        {menuItems.map((item) => (
-          <button
-            key={item}
-            onClick={() => onSelect(item)}
-            style={
-              item === "Solicitar eSIM"
-                ? primaryButton
-                : item === "Mis uSIMs"
-                ? {
-                    ...baseButton,
-                    border: "2px solid #38bdf8",
-                    color: "#dff6ff",
-                    boxShadow: "0 0 16px rgba(56, 189, 248, 0.34)",
-                  }
-                  : item === "uSIMs fisicas"
-                  ? {
-                      ...baseButton,
-                      border: "2px solid #7dd3fc",
-                      color: "#c7ecff",
-                      boxShadow: "0 0 16px rgba(125, 211, 252, 0.28)",
-                    }
-                : item === "Mis Solicitudes"
-                ? featuredButton
-                : baseButton
-            }
-          >
-            {item === "Mis Solicitudes" && (
-              <>
-                <span style={styles.featureSweep} aria-hidden="true" />
-                <span style={styles.featureBeacon} aria-hidden="true" />
-              </>
-            )}
-            {item}
-          </button>
-        ))}
+      <div className="app-navbar__account">
+        <div className="app-navbar__account-copy">
+          <span className="app-navbar__user-name">{user?.name || "Usuario"}</span>
+          {user?.email && <span className="app-navbar__user-email">{user.email}</span>}
+          {user?.agencia && <span className="app-navbar__agency">Agencia: {user.agencia}</span>}
+        </div>
+        <button type="button" className="app-navbar__logout" onClick={onLogout}>
+          Cerrar sesión
+        </button>
       </div>
 
-      {/* Logout */}
-      <button onClick={onLogout} style={styles.logout}>
-        Cerrar sesión
-      </button>
+      <div className="app-navbar__menu">
+        {menuItems.map(({ value, label, tone, featured }) => {
+          const active = value === activeSection;
+          const className = [
+            "app-navbar__item",
+            `app-navbar__item--${tone}`,
+            active && "app-navbar__item--active",
+            featured && "app-navbar__item--featured",
+          ].filter(Boolean).join(" ");
+
+          return (
+            <button
+              key={value}
+              type="button"
+              className={className}
+              aria-current={active ? "page" : undefined}
+              onClick={() => onSelect(value)}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
     </nav>
   );
 }
-
-/* ===================== STYLES ===================== */
-
-const styles = {
-  nav: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "1.2rem 2vw",
-    background: "#181818",
-    borderBottom: "2px solid #00fff7",
-    boxShadow: "0 4px 32px #00fff7cc",
-    position: "relative",
-    zIndex: 10,
-  },
-  userInfo: {
-    display: "flex",
-    alignItems: "center",
-    gap: 16,
-  },
-  logo: {
-    height: 38,
-    filter: "drop-shadow(0 0 8px #00fff7)",
-  },
-  appName: {
-    fontWeight: 900,
-    color: "#00fff7",
-    fontSize: 18,
-    letterSpacing: 1,
-    textShadow: "0 1px 8px #00fff7cc",
-  },
-  userName: {
-    fontWeight: 700,
-    color: "#00fff7",
-    fontSize: 13,
-    letterSpacing: 1,
-  },
-  userEmail: {
-    fontSize: 12,
-    color: "#fff",
-    opacity: 0.7,
-  },
-  userAgency: {
-    fontSize: 12,
-    color: "#9ef6ea",
-    opacity: 0.9,
-    marginTop: 2,
-    letterSpacing: 0.2,
-  },
-  menu: {
-    display: "flex",
-    gap: 12,
-  },
-  featureSweep: {
-    position: "absolute",
-    inset: 0,
-    background: "linear-gradient(90deg, transparent, rgba(122, 249, 255, 0.26), transparent)",
-    transform: "translateX(-130%)",
-    animation: "nav-feature-sweep 4.8s linear infinite",
-    pointerEvents: "none",
-  },
-  featureBeacon: {
-    position: "absolute",
-    top: 7,
-    right: 10,
-    width: 8,
-    height: 8,
-    borderRadius: 999,
-    background: "#8ffcff",
-    boxShadow: "0 0 10px rgba(143, 252, 255, 0.92)",
-    animation: "nav-feature-beacon 1.3s ease-in-out infinite",
-    pointerEvents: "none",
-  },
-  logout: {
-    background: "#ff3c2f",
-    color: "#fff",
-    borderRadius: 20,
-    padding: "0.5rem 1.5rem",
-    fontWeight: 900,
-    border: "none",
-    fontSize: 16,
-    boxShadow: "0 2px 16px #ff3c2fcc",
-    cursor: "pointer",
-    letterSpacing: 1,
-  },
-};

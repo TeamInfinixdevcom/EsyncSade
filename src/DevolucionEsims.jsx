@@ -1,13 +1,14 @@
 import React, { useState } from "react";
 import { addDoc, collection, getDocs, query, updateDoc, where } from "firebase/firestore";
 import { auth, db } from "./firebase";
-import { getUserAgency, sameAgency, normalizeAgency } from "./userProfile";
+import { getUserAgency, sameAgency, normalizeAgency, isGeneralAdmin } from "./userProfile";
 import "./forms.css";
 
 export default function DevolucionEsims({ user }) {
   const [serie, setSerie] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [loading, setLoading] = useState(false);
+  const adminGeneral = isGeneralAdmin(user);
   const mensajeError =
     mensaje.includes("Error") ||
     mensaje.includes("debe") ||
@@ -28,7 +29,7 @@ export default function DevolucionEsims({ user }) {
     }
 
     const agenciaUsuario = getUserAgency(user);
-    if (!agenciaUsuario) {
+    if (!agenciaUsuario && !adminGeneral) {
       setMensaje("Tu usuario no tiene agencia asignada. Contacta al administrador general.");
       return;
     }
@@ -37,11 +38,9 @@ export default function DevolucionEsims({ user }) {
     setMensaje("");
 
     try {
-      const q = query(
-        collection(db, "esims"),
-        where("agencia", "==", agenciaUsuario),
-        where("serie", "==", serie)
-      );
+      const filtros = [where("serie", "==", serie)];
+      if (!adminGeneral) filtros.unshift(where("agencia", "==", agenciaUsuario));
+      const q = query(collection(db, "esims"), ...filtros);
       const snap = await getDocs(q);
 
       if (snap.empty) {
@@ -50,7 +49,14 @@ export default function DevolucionEsims({ user }) {
         return;
       }
 
-      const esimDoc = snap.docs[0];
+      const esimsUsadas = snap.docs.filter((docu) => docu.data().estado === "usada");
+      if (adminGeneral && esimsUsadas.length > 1) {
+        setMensaje("Hay varias eSIM usadas con esa serie. Verifica la serie antes de devolverla.");
+        setLoading(false);
+        return;
+      }
+
+      const esimDoc = adminGeneral && esimsUsadas.length === 1 ? esimsUsadas[0] : snap.docs[0];
       const esimData = esimDoc.data();
       const agenciaEsim = esimData.agencia || agenciaUsuario;
 
@@ -60,7 +66,7 @@ export default function DevolucionEsims({ user }) {
         return;
       }
 
-      if (esimData.agencia && !sameAgency(esimData.agencia, agenciaUsuario)) {
+      if (!adminGeneral && esimData.agencia && !sameAgency(esimData.agencia, agenciaUsuario)) {
         setMensaje("Esa eSIM pertenece a otra agencia y no puedes devolverla desde tu perfil.");
         setLoading(false);
         return;
@@ -126,11 +132,13 @@ export default function DevolucionEsims({ user }) {
 
   return (
     <div className="form-screen">
-      <div className="form-card" style={{ maxWidth: 520 }}>
+      <div className={`form-card form-card--return${loading ? " is-submitting" : ""}`} style={{ maxWidth: 520 }}>
         <p className="form-kicker">Inventario</p>
         <h2 className="form-title">Devolucion de eSIM</h2>
         <p className="form-subtitle">
-          Ingresa la serie de 20 digitos para dejar la eSIM disponible y registrar la devolucion en historial.
+          {adminGeneral
+            ? "Ingresa la serie de 20 dígitos. Se conserva la agencia y el lote original de la eSIM."
+            : "Ingresa la serie de 20 digitos para dejar la eSIM disponible y registrar la devolucion en historial."}
         </p>
 
         <form onSubmit={handleDevolver}>
@@ -147,7 +155,11 @@ export default function DevolucionEsims({ user }) {
             />
           </div>
 
-          <button type="submit" disabled={loading} className="form-button form-button--primary">
+          <button
+            type="submit"
+            disabled={loading}
+            className={`form-button form-button--primary${loading ? " is-loading" : ""}`}
+          >
             {loading ? "Registrando devolucion..." : "Registrar devolucion"}
           </button>
         </form>

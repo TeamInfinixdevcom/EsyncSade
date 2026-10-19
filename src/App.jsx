@@ -106,6 +106,7 @@ function App() {
         onLogout={handleLogout}
         user={user}
         onSelect={handleSelectSection}
+        activeSection={sectionActiva}
       />
 
       <main style={styles.main}>

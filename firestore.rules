@@ -61,6 +61,20 @@ service cloud.firestore {
       return isAgencyAdmin() && myAgency() == agency;
     }
 
+    function userTransferPath(userId) {
+      return /databases/$(database)/documents/traslados_usuarios/$(userId);
+    }
+
+    function userDocumentPath(userId) {
+      return /databases/$(database)/documents/usuarios/$(userId);
+    }
+
+    function hasPendingTransferTo(userId, agency) {
+      return exists(userTransferPath(userId)) &&
+        get(userTransferPath(userId)).data.estado == "pendiente" &&
+        get(userTransferPath(userId)).data.agenciaDestino == agency;
+    }
+
     function isAgencyMember(agency) {
       return hasProfile() && (
         isGeneralAdmin() ||
@@ -120,6 +134,21 @@ service cloud.firestore {
           request.resource.data.agencia == myAgency() &&
           request.resource.data.adminGeneral != true &&
           request.resource.data.rol != "admin_general"
+        ) ||
+        (
+          isAgencyAdmin() &&
+          hasPendingTransferTo(userId, myAgency()) &&
+          getAfter(userTransferPath(userId)).data.estado == "aceptado" &&
+          getAfter(userTransferPath(userId)).data.agenciaDestino == myAgency() &&
+          resource.data.agencia is string &&
+          resource.data.agencia != myAgency() &&
+          !isTrueFlag(resource.data.get("adminGeneral", false)) &&
+          !isTrueFlag(resource.data.get("superAdmin", false)) &&
+          resource.data.rol != "admin_general" &&
+          resource.data.rol != "super_admin" &&
+          resource.data.rol != "administrador_general" &&
+          request.resource.data.agencia == myAgency() &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["agencia", "fechaActualizacion"])
         ) ||
         (
           signedIn() && userId == request.auth.uid &&
@@ -285,11 +314,43 @@ service cloud.firestore {
         isOwnerEmail(resource.data.usuario) ||
         (hasProfile() && isAgencyAdmin() && resource.data.agencia == myAgency());
 
-      allow create: if hasProfile() &&
+      allow create: if (
+        isGeneralAdmin() && request.resource.data.agencia is string
+      ) || (
+        hasProfile() &&
         request.resource.data.usuario == request.auth.token.email &&
-        request.resource.data.agencia == myAgency();
+        request.resource.data.agencia == myAgency()
+      );
 
       allow update, delete: if canDeleteInAgency(resource.data.agencia);
+    }
+
+    match /traslados_usuarios/{userId} {
+      allow read: if isGeneralAdmin() ||
+        (isAgencyAdmin() && resource.data.agenciaDestino == myAgency());
+
+      allow create: if isGeneralAdmin() &&
+        request.resource.data.usuarioUid == userId &&
+        request.resource.data.estado == "pendiente" &&
+        request.resource.data.agenciaDestino is string;
+
+      allow update: if (
+          isGeneralAdmin() &&
+          request.resource.data.usuarioUid == userId &&
+          request.resource.data.estado == "pendiente" &&
+          request.resource.data.agenciaDestino is string
+        ) || (
+          isAgencyAdmin() &&
+          resource.data.estado == "pendiente" &&
+          resource.data.agenciaDestino == myAgency() &&
+          request.resource.data.estado == "aceptado" &&
+          request.resource.data.aceptadoPorUid == request.auth.uid &&
+          request.resource.data.usuarioUid == userId &&
+          getAfter(userDocumentPath(userId)).data.agencia == myAgency() &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["estado", "fechaAceptacion", "aceptadoPorUid"])
+        );
+
+      allow delete: if false;
     }
 
     match /agencias/{agenciaId} {
