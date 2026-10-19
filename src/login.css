@@ -53,8 +53,8 @@
   min-height: 190px;
   opacity: 0.82;
   pointer-events: none;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 32%, #000 100%);
-  mask-image: linear-gradient(to bottom, transparent 0%, #000 32%, #000 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 14%, #000 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 14%, #000 100%);
 }
 
 .login-scene svg {

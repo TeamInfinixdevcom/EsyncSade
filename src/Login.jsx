@@ -32,7 +32,7 @@ export default function Login({ onLogin }) {
   return (
     <main className="login-screen">
       <div className="login-scene" aria-hidden="true">
-        <svg viewBox="0 0 1440 310" preserveAspectRatio="xMidYMax slice">
+        <svg viewBox="0 0 1440 310" preserveAspectRatio="xMidYMax meet">
           <defs>
             <linearGradient id="login-neon-line" x1="0" x2="1">
               <stop offset="0" stopColor="#35f5c6" />
