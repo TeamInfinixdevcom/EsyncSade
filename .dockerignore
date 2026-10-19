@@ -1,0 +1,11 @@
+.git
+.firebase
+node_modules
+**/node_modules
+dist
+dist-ssr
+*.log
+.env*
+!.env.example
+firebase-adminsdk.json
+*-firebase-adminsdk-*.json

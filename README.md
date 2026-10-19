@@ -11,6 +11,16 @@ Currently, two official plugins are available:
 
 The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
 
+## Cloud Run
+
+The root project is the React/Vite web app. Its `Dockerfile` builds the app and serves the `dist` files through `server.mjs` on the port provided by Cloud Run. It does not add API endpoints.
+
+From the repository root, deploy the web app with:
+
+```sh
+gcloud run deploy esyncsade-backend --source . --port 8080
+```
+
 ## Expanding the ESLint configuration
 
 If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
