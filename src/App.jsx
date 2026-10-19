@@ -133,10 +133,9 @@ const styles = {
     padding: "2rem 0",
   },
   loginWrapper: {
-    width: "100vw",
-    height: "100vh",
-    background:
-      "radial-gradient(ellipse at 40% 40%, #181818 60%, #0ff 100%, #23243e 120%)",
+    width: "100%",
+    minHeight: "100svh",
+    background: "#080910",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
